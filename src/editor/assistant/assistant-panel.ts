@@ -1,10 +1,23 @@
 import { Panel, Container, TextInput, Button } from '@playcanvas/pcui';
 
+import { AssistantClient } from '../../common/ai/assistant-client.ts';
+
 type MessageRole = 'user' | 'assistant';
+
+type MessageHandle = {
+    wrapper: HTMLDivElement;
+    body: HTMLDivElement;
+};
+
+const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Ask clarifying questions before attempting risky edits.';
 
 editor.once('load', () => {
     const viewport = editor.call('layout.viewport');
     const assetPanel = editor.call('layout.assets');
+    const assistantClient = new AssistantClient({
+        instructions: DEFAULT_ASSISTANT_INSTRUCTIONS
+    });
+    const assistantReady = assistantClient.isReady();
 
     const assistantPanel = new Panel({
         class: 'assistant-panel',
@@ -67,7 +80,7 @@ editor.once('load', () => {
     });
     inputRow.append(sendButton);
 
-    const addMessage = (role: MessageRole, text: string) => {
+    const addMessage = (role: MessageRole, text: string): MessageHandle => {
         const wrapper = document.createElement('div');
         wrapper.classList.add('assistant-panel__message', `assistant-panel__message--${role}`);
 
@@ -83,25 +96,32 @@ editor.once('load', () => {
 
         messages.append(wrapper);
         messages.element.scrollTop = messages.element.scrollHeight;
+
+        return { wrapper, body };
     };
 
-    const cannedResponses = [
-        'Thanks for testing the upcoming assistant! This is a placeholder reply until the OpenAI-powered workflow is wired up.',
-        'Once the AI backend is connected this panel will summarize context, plan changes, and ask for approval before editing your project.',
-        'Everything you type here is kept local for now, which makes it a safe sandbox for iterating on the UX.'
-    ];
-    let cannedIndex = 0;
-
-    const scheduleResponse = (userMessage: string) => {
-        const response = `${cannedResponses[cannedIndex % cannedResponses.length]}\n\nEchoing back what you said so you can see the flow:\n"${userMessage}"`;
-        cannedIndex += 1;
-
-        setTimeout(() => {
-            addMessage('assistant', response);
-        }, 400);
+    const formatError = (error: unknown) => {
+        if (error instanceof Error) {
+            return error.message;
+        }
+        if (typeof error === 'string' && error.trim().length) {
+            return error;
+        }
+        return 'Unknown error';
     };
 
-    const sendMessage = () => {
+    const setSendingState = (sending: boolean) => {
+        sendButton.enabled = assistantReady && !sending;
+        messageInput.readOnly = sending;
+    };
+
+    let isSending = false;
+
+    const sendMessage = async () => {
+        if (!assistantReady || isSending) {
+            return;
+        }
+
         const value = (messageInput.value || '').trim();
         if (!value) {
             return;
@@ -109,7 +129,21 @@ editor.once('load', () => {
 
         addMessage('user', value);
         messageInput.value = '';
-        scheduleResponse(value);
+        isSending = true;
+        setSendingState(true);
+
+        const assistantMessage = addMessage('assistant', 'Thinking...');
+
+        try {
+            const result = await assistantClient.send(value);
+            assistantMessage.body.textContent = result.text || 'The assistant returned an empty reply.';
+        } catch (error) {
+            assistantMessage.body.textContent = `Unable to contact the assistant: ${formatError(error)}`;
+            assistantMessage.wrapper.classList.add('assistant-panel__message--error');
+        } finally {
+            isSending = false;
+            setSendingState(false);
+        }
     };
 
     sendButton.on('click', sendMessage);
@@ -117,7 +151,7 @@ editor.once('load', () => {
     messageInput.element.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
-            sendMessage();
+            void sendMessage();
         }
     });
 
@@ -129,5 +163,11 @@ editor.once('load', () => {
 
     editor.method('assistant:sendMessage', sendMessage);
 
-    addMessage('assistant', 'Hi! I\'m the upcoming PlayCanvas assistant. For now I can echo your messages and show how the conversation UI will behave.');
+    if (assistantReady) {
+        addMessage('assistant', 'Hi! I\'m the PlayCanvas assistant. Let me know what you need help with and I\'ll reason over your project.');
+    } else {
+        sendButton.enabled = false;
+        messageInput.readOnly = true;
+        addMessage('assistant', 'Assistant backend is not configured. Set OPENAI_* environment variables (e.g. OPENAI_API_KEY) before building to enable this panel.');
+    }
 });
