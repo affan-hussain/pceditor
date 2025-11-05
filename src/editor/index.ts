@@ -275,9 +275,6 @@ import './chat/chat-typing.ts';
 import './chat/chat-system.ts';
 import './chat/chat-notifications.ts';
 
-// assistant
-import './assistant/assistant-panel.ts';
-
 // toolbar
 import './toolbar/toolbar-logo.ts';
 import './toolbar/toolbar-editor-settings.ts';
