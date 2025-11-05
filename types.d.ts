@@ -36,6 +36,11 @@ declare var pcBootstrap: any;
 // relay (loaded in HTML)
 declare var relay: import('./src/editor/relay/relay-server').RelayServer;
 
+// env
+declare const process: {
+    env: Record<string, string | undefined>;
+};
+
 // array extensions
 declare interface Array {
     equals: (array: any[]) => boolean;

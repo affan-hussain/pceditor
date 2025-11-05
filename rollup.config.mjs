@@ -11,11 +11,22 @@ import polyfills from 'rollup-plugin-polyfill-node';
 const production = process.env.NODE_ENV === 'production';
 const sourcemap = production ? true : 'inline';
 
+const envStringify = (value) => JSON.stringify(value ?? '');
+
 const plugins = () => {
     return [
         replace({
             values: {
                 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
+                'process.env.OPENAI_API_KEY': envStringify(process.env.OPENAI_API_KEY),
+                'process.env.OPENAI_BASE_URL': envStringify(process.env.OPENAI_BASE_URL),
+                'process.env.OPENAI_API_BASE': envStringify(process.env.OPENAI_API_BASE),
+                'process.env.OPENAI_ENDPOINT': envStringify(process.env.OPENAI_ENDPOINT),
+                'process.env.OPENAI_MODEL': envStringify(process.env.OPENAI_MODEL),
+                'process.env.OPENAI_ASSISTANT_INSTRUCTIONS': envStringify(process.env.OPENAI_ASSISTANT_INSTRUCTIONS),
+                'process.env.OPENAI_ORG': envStringify(process.env.OPENAI_ORG),
+                'process.env.OPENAI_ORGANIZATION': envStringify(process.env.OPENAI_ORGANIZATION),
+                'process.env.OPENAI_PROJECT': envStringify(process.env.OPENAI_PROJECT),
                 '.font-regular': '.font-regular-disabled'
             },
             preventAssignment: true

@@ -3002,6 +3002,109 @@ strong {
     }
 }
 
+.pcui-panel.assistant-panel {
+    position: absolute;
+    bottom: 36px;
+    right: 4px;
+    width: 320px;
+    height: 320px;
+
+    &.pcui-collapsed {
+        width: 160px;
+    }
+
+    > .pcui-panel-header {
+        &::before {
+            content: '\E233';
+        }
+    }
+
+    > .pcui-panel-content {
+        height: calc(100% - 32px);
+        padding: 0;
+
+        > .assistant-panel__body {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .assistant-panel__messages {
+            flex: 1;
+            padding: 8px;
+            overflow-y: auto;
+            user-select: text;
+            word-break: break-word;
+            background-color: $bcg-darker;
+            border-bottom: 1px solid $bcg-darkest;
+        }
+
+        .assistant-panel__input-row {
+            display: flex;
+            gap: 8px;
+            padding: 8px;
+            border-top: 1px solid $bcg-darkest;
+            align-items: flex-end;
+        }
+
+        .assistant-panel__input {
+            flex: 1;
+
+            input {
+                width: 100%;
+            }
+        }
+
+        .assistant-panel__send {
+            flex-shrink: 0;
+            min-width: 72px;
+        }
+
+        .assistant-panel__message {
+            font-size: 12px;
+            line-height: 16px;
+            margin-bottom: 10px;
+
+            &:last-child {
+                margin-bottom: 0;
+            }
+        }
+
+        .assistant-panel__message-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: $text-secondary;
+        }
+
+        .assistant-panel__message-text {
+            margin-top: 3px;
+            padding: 6px 8px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            background-color: $bcg-darkest;
+            color: $text-primary;
+        }
+
+        .assistant-panel__message--assistant {
+            .assistant-panel__message-text {
+                background-color: rgba($bcg-darkest, 0.75);
+            }
+        }
+
+        .assistant-panel__message--user {
+            .assistant-panel__message-label {
+                color: $text-primary;
+            }
+
+            .assistant-panel__message-text {
+                background-color: $text-active;
+                color: $text-primary;
+            }
+        }
+    }
+}
+
 .pcui-container.widget-title {
     position: absolute;
     top: 4px;
