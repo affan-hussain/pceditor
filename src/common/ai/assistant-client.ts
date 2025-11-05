@@ -1,5 +1,11 @@
 import OpenAI from 'openai';
-import type { Response } from 'openai/resources/responses/responses';
+import type {
+    FunctionTool,
+    Response,
+    ResponseFunctionToolCall,
+    ResponseInputItem,
+    ResponseReasoningItem
+} from 'openai/resources/responses/responses';
 
 type AssistantRole = 'system' | 'developer' | 'user' | 'assistant';
 
@@ -7,6 +13,21 @@ type AssistantMessage = {
     role: AssistantRole;
     content: string;
     type?: 'message';
+};
+
+type AssistantConversationItem = AssistantMessage | ResponseInputItem.FunctionCallOutput | ResponseFunctionToolCall | ResponseReasoningItem;
+type AssistantRequestItem = AssistantMessage | ResponseInputItem.FunctionCallOutput | ResponseFunctionToolCall | ResponseReasoningItem;
+
+export type AssistantToolResult = string | number | boolean | null | Record<string, unknown> | Array<unknown>;
+
+export type AssistantToolHandler<TArgs = Record<string, unknown>> = (args: TArgs) => AssistantToolResult | Promise<AssistantToolResult>;
+
+export type AssistantToolDefinition<TArgs = Record<string, unknown>> = {
+    name: string;
+    description: string;
+    parameters?: Record<string, unknown> | null;
+    strict?: boolean;
+    handler: AssistantToolHandler<TArgs>;
 };
 
 export type AssistantClientOptions = {
@@ -17,6 +38,9 @@ export type AssistantClientOptions = {
     organization?: string;
     project?: string;
     headers?: Record<string, string | undefined>;
+    tools?: AssistantToolDefinition[];
+    parallelToolCalls?: boolean;
+    maxToolIterations?: number;
 };
 
 export type AssistantSendOptions = {
@@ -29,6 +53,12 @@ export type AssistantResult = {
 };
 
 const DEFAULT_MODEL = 'gpt-4.1-mini';
+const DEFAULT_MAX_TOOL_ITERATIONS = 4;
+const DEFAULT_TOOL_PARAMETERS = {
+    type: 'object',
+    properties: {},
+    additionalProperties: false
+};
 const RESPONSES_BETA_HEADER = 'responses=v1';
 
 const envString = (raw?: string | null): string | undefined => {
@@ -46,13 +76,21 @@ const ENV_FALLBACKS: AssistantClientOptions = {
     instructions: envString(process.env.OPENAI_ASSISTANT_INSTRUCTIONS),
     organization: envString(process.env.OPENAI_ORG || process.env.OPENAI_ORGANIZATION),
     project: envString(process.env.OPENAI_PROJECT),
-    headers: undefined
+    headers: undefined,
+    tools: undefined,
+    parallelToolCalls: undefined,
+    maxToolIterations: undefined
 };
 
 export class AssistantClient {
     private openai: OpenAI | null;
     private readonly options: AssistantClientOptions & { model: string; headers: Record<string, string | undefined> };
-    private conversation: AssistantMessage[] = [];
+    private conversation: AssistantConversationItem[] = [];
+    private requestHistory: AssistantRequestItem[] = [];
+    private readonly toolMap: Map<string, AssistantToolDefinition>;
+    private readonly functionTools?: FunctionTool[];
+    private readonly maxToolIterations: number;
+    private readonly parallelToolCalls: boolean;
 
     constructor(options: AssistantClientOptions = {}) {
         const resolvedOptions: AssistantClientOptions = {
@@ -70,13 +108,25 @@ export class AssistantClient {
             model: resolvedOptions.model || DEFAULT_MODEL,
             headers: mergedHeaders
         };
+        this.toolMap = new Map((resolvedOptions.tools || []).map((tool) => [tool.name, tool]));
+        this.functionTools = this.toolMap.size ? Array.from(this.toolMap.values()).map((tool): FunctionTool => ({
+            type: 'function',
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters ?? DEFAULT_TOOL_PARAMETERS,
+            strict: tool.strict ?? true
+        })) : undefined;
+        this.maxToolIterations = resolvedOptions.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+        this.parallelToolCalls = resolvedOptions.parallelToolCalls ?? false;
 
         if (this.options.instructions) {
-            this.conversation.push({
+            const systemMessage: AssistantMessage = {
                 role: 'system',
                 content: this.options.instructions,
                 type: 'message'
-            });
+            };
+            this.conversation.push(systemMessage);
+            this.requestHistory.push(systemMessage);
         }
 
         this.openai = this.createClient();
@@ -88,7 +138,6 @@ export class AssistantClient {
         }
 
         try {
-            // Remove undefined headers so the OpenAI SDK does not send them.
             const headers = Object.fromEntries(
                 Object.entries(this.options.headers || {}).filter(([, value]) => value !== undefined && value !== null)
             );
@@ -113,12 +162,15 @@ export class AssistantClient {
 
     resetConversation() {
         this.conversation = [];
+        this.requestHistory = [];
         if (this.options.instructions) {
-            this.conversation.push({
+            const systemMessage: AssistantMessage = {
                 role: 'system',
                 content: this.options.instructions,
                 type: 'message'
-            });
+            };
+            this.conversation.push(systemMessage);
+            this.requestHistory.push(systemMessage);
         }
     }
 
@@ -132,33 +184,136 @@ export class AssistantClient {
             content: text,
             type: 'message'
         };
+        const conversationStartIndex = this.conversation.length;
+        const requestStartIndex = this.requestHistory.length;
         this.conversation.push(userMessage);
+        this.requestHistory.push(userMessage);
 
         try {
-            const response = await this.openai.responses.create({
-                model: this.options.model,
-                input: this.conversation
-            }, {
-                signal: options?.signal
-            });
+            let iteration = 0;
 
-            const assistantText = AssistantClient.extractText(response);
+            while (true) {
+                const response = await this.openai.responses.create({
+                    model: this.options.model,
+                    input: this.requestHistory,
+                    ...(this.functionTools ? {
+                        tools: this.functionTools,
+                        parallel_tool_calls: this.parallelToolCalls
+                    } : {})
+                }, {
+                    signal: options?.signal
+                });
 
-            this.conversation.push({
-                role: 'assistant',
-                content: assistantText,
-                type: 'message'
-            });
+                const { reasoningItems, toolCalls } = AssistantClient.collectResponseArtifacts(response);
+                if (reasoningItems.length) {
+                    this.conversation.push(...reasoningItems);
+                    this.requestHistory.push(...reasoningItems);
+                }
 
-            return {
-                text: assistantText,
-                response
-            };
+                if (!toolCalls.length) {
+                    const assistantText = AssistantClient.extractText(response);
+                    const assistantMessage: AssistantMessage = {
+                        role: 'assistant',
+                        content: assistantText,
+                        type: 'message'
+                    };
+                    this.conversation.push(assistantMessage);
+                    this.requestHistory.push(assistantMessage);
+
+                    return {
+                        text: assistantText,
+                        response
+                    };
+                }
+
+                if (!this.functionTools?.length) {
+                    throw new Error('Assistant requested an editor tool, but none are registered.');
+                }
+
+                if (iteration >= this.maxToolIterations) {
+                    throw new Error(`Assistant exceeded the tool-call limit (${this.maxToolIterations}).`);
+                }
+                iteration++;
+
+                for (const call of toolCalls) {
+                    this.conversation.push(call);
+                    this.requestHistory.push(call);
+                    const output = await this.invokeTool(call);
+                    this.conversation.push(output);
+                    this.requestHistory.push(output);
+                }
+            }
         } catch (error) {
-            // Remove the user entry if the request failed so we do not poison the convo history.
-            this.conversation.pop();
+            this.conversation.splice(conversationStartIndex);
+            this.requestHistory.splice(requestStartIndex);
             throw error;
         }
+    }
+
+    private async invokeTool(call: ResponseFunctionToolCall): Promise<ResponseInputItem.FunctionCallOutput> {
+        const tool = this.toolMap.get(call.name);
+        const callId = call.call_id || call.id;
+
+        if (!callId) {
+            throw new Error(`Tool call "${call.name}" did not include a call id.`);
+        }
+
+        if (!tool) {
+            return AssistantClient.createToolOutput(callId, `Tool "${call.name}" is not available in this editor build.`);
+        }
+
+        let parsedArguments: unknown = {};
+        if (call.arguments && call.arguments.trim().length) {
+            try {
+                parsedArguments = JSON.parse(call.arguments);
+            } catch (error) {
+                return AssistantClient.createToolOutput(callId, `Unable to parse arguments for "${call.name}": ${AssistantClient.formatError(error)}.`);
+            }
+        }
+
+        try {
+            const result = await tool.handler(parsedArguments as Record<string, unknown>);
+            return AssistantClient.createToolOutput(callId, this.serializeToolResult(result));
+        } catch (error) {
+            return AssistantClient.createToolOutput(callId, `Tool "${call.name}" failed: ${AssistantClient.formatError(error)}`);
+        }
+    }
+
+    private serializeToolResult(value: AssistantToolResult): string {
+        if (value === undefined || value === null) {
+            return 'null';
+        }
+
+        if (typeof value === 'string') {
+            return value;
+        }
+
+        if (typeof value === 'number' || typeof value === 'boolean') {
+            return JSON.stringify(value);
+        }
+
+        try {
+            return JSON.stringify(value, null, 2);
+        } catch (error) {
+            return `Unable to serialize tool result: ${AssistantClient.formatError(error)}`;
+        }
+    }
+
+    private static collectResponseArtifacts(response: Response) {
+        const reasoningItems: ResponseReasoningItem[] = [];
+        const toolCalls: ResponseFunctionToolCall[] = [];
+
+        if (Array.isArray(response.output)) {
+            for (const item of response.output) {
+                if (item.type === 'reasoning') {
+                    reasoningItems.push(item);
+                } else if (item.type === 'function_call') {
+                    toolCalls.push(item);
+                }
+            }
+        }
+
+        return { reasoningItems, toolCalls };
     }
 
     private static extractText(response: Response): string {
@@ -181,5 +336,23 @@ export class AssistantClient {
             }
         }
         return segments.join('').trim();
+    }
+
+    private static createToolOutput(callId: string, output: string): ResponseInputItem.FunctionCallOutput {
+        return {
+            type: 'function_call_output',
+            call_id: callId,
+            output
+        };
+    }
+
+    private static formatError(error: unknown): string {
+        if (error instanceof Error) {
+            return error.message;
+        }
+        if (typeof error === 'string' && error.trim().length) {
+            return error.trim();
+        }
+        return 'Unknown error';
     }
 }

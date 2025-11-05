@@ -66,6 +66,15 @@ Define a catalogue of assistant tools. Each tool has:
 4. **History integration** – wrap executors with `editor.api.globals.history.begin/commit` so actions show up in undo.
 5. **Result payload** – what changed, diff text, errors (fed back into the chat).
 
+#### 4.4.1 Initial tool scaffolding (implemented)
+
+- `src/common/ai/assistant-client.ts` now accepts typed tool definitions, translates them into Responses API `tools`, and loops through tool calls (capturing both the model’s `function_call` items and our `function_call_output` payloads) until a final assistant message is produced.
+- `src/editor/assistant/assistant-tools.ts` registers the first read-only helpers exposed to the model via `assistant-panel.ts`. Current tools include:
+  - `describe_current_selection` – returns sanitized summaries for the active entity/asset selection (type, path, components, tags, counts) so the model can ground Q&A responses without streaming the entire project.
+  - `describe_selected_entity_tree` – walks the hierarchy below the primary selected entity with configurable depth/child caps, surfacing parent paths and component hints for spatial reasoning.
+  - `describe_selected_asset_tree` – reports the selected asset’s folder ancestry plus either sibling (for files) or child (for folders) previews to answer “where is this asset located?” questions.
+- The assistant panel wires these helpers into `AssistantClient` via `createAssistantTools()`, so future tools only need to extend that registry without touching the UI glue.
+
 ### 4.5 Safety, approvals & observability
 
 - **Permission gating** – every tool checks `editor.call('permissions:write')` before executing; read-only users only get explanatory answers.

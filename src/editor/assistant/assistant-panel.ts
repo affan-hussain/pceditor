@@ -1,6 +1,7 @@
 import { Panel, Container, TextInput, Button } from '@playcanvas/pcui';
 
 import { AssistantClient } from '../../common/ai/assistant-client.ts';
+import { createAssistantTools } from './assistant-tools.ts';
 
 type MessageRole = 'user' | 'assistant';
 
@@ -15,7 +16,8 @@ editor.once('load', () => {
     const viewport = editor.call('layout.viewport');
     const assetPanel = editor.call('layout.assets');
     const assistantClient = new AssistantClient({
-        instructions: DEFAULT_ASSISTANT_INSTRUCTIONS
+        instructions: DEFAULT_ASSISTANT_INSTRUCTIONS,
+        tools: createAssistantTools()
     });
     const assistantReady = assistantClient.isReady();
 
