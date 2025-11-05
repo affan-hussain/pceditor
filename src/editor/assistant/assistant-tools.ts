@@ -18,6 +18,18 @@ type AssetTreeArgs = {
     maxChildren?: number;
 };
 
+type ScriptReadArgs = {
+    assetId: number;
+};
+
+type ScriptWriteArgs = {
+    assetId?: number | null;
+    folderId?: number | null;
+    filename?: string | null;
+    contents: string;
+    description?: string | null;
+};
+
 const DEFAULT_SELECTION_LIMIT = 5;
 const DEFAULT_ENTITY_DEPTH = 2;
 const DEFAULT_TREE_CHILD_LIMIT = 6;
@@ -185,6 +197,109 @@ const buildAssetSummary = (asset: Observer) => {
     }
 
     return summary;
+};
+
+type AssetCandidate = Observer | { observer?: Observer } | null | undefined;
+
+const toAssetObserver = (candidate: AssetCandidate): Observer | null => {
+    if (!candidate) {
+        return null;
+    }
+    if (typeof candidate === 'object' && 'observer' in candidate) {
+        const observer = candidate.observer;
+        if (observer) {
+            return observer;
+        }
+    }
+    return candidate as Observer;
+};
+
+const formatError = (error: unknown) => {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    if (typeof error === 'string' && error.trim().length) {
+        return error.trim();
+    }
+    return 'Unknown error';
+};
+
+const getScriptAsset = (assetId: number) => {
+    const asset = editor.call('assets:get', assetId) as Observer | null;
+    if (!asset) {
+        throw new Error(`No asset found with id ${assetId}.`);
+    }
+    if (asset.get('type') !== 'script') {
+        throw new Error(`Asset ${assetId} is not a script (type is "${asset.get('type')}").`);
+    }
+    return asset;
+};
+
+const fetchScriptContents = (asset: Observer) => {
+    return new Promise<string>((resolve, reject) => {
+        const file = asset.get('file');
+        const filename = file?.filename;
+        if (!filename) {
+            reject(new Error(`Script asset ${asset.get('id')} does not have a file.`));
+            return;
+        }
+
+        editor.api.globals.rest.assets.assetGetFile(asset.get('id'), filename, { branchId: config.self.branch.id })
+        .on('load', (_status: number, data: string) => {
+            resolve((data || '').replace(/\r\n?/g, '\n'));
+        })
+        .on('error', (status: number, err: string) => {
+            reject(new Error(err || `Failed to load script asset ${asset.get('id')} (status ${status}).`));
+        });
+    });
+};
+
+const scriptMimeFromFilename = (filename: string) => {
+    const lower = filename.toLowerCase();
+    if (lower.endsWith('.mjs') || lower.endsWith('.js')) {
+        return 'text/javascript';
+    }
+    return 'text/plain';
+};
+
+const resolveFolderFromId = (folderId?: number | null) => {
+    if (typeof folderId === 'number' && !Number.isNaN(folderId)) {
+        const folder = editor.call('assets:get', folderId) as Observer | null;
+        if (!folder) {
+            throw new Error(`No folder found with id ${folderId}.`);
+        }
+        if (folder.get('type') !== 'folder') {
+            throw new Error(`Asset ${folderId} is not a folder.`);
+        }
+        return folder;
+    }
+    return editor.call('assets:selected:folder') as Observer | null;
+};
+
+const updateScriptAsset = async (asset: Observer, contents: string, overrideFilename?: string | null) => {
+    const currentFilename = asset.get('file')?.filename;
+    const filename = (overrideFilename && overrideFilename.trim()) || currentFilename || `${asset.get('name') || 'script'}.js`;
+    const blob = new Blob([contents], { type: scriptMimeFromFilename(filename) });
+
+    const updated = await editor.api.globals.assets.upload({
+        id: asset.get('id'),
+        type: 'script',
+        filename,
+        file: blob
+    });
+
+    return toAssetObserver(updated) || asset;
+};
+
+const createScriptAsset = async (filename: string, contents: string, folder: Observer | null) => {
+    const result = await editor.api.globals.assets.createScript({
+        filename,
+        folder,
+        text: contents
+    });
+
+    // createScript already uploads the content, but return value is the API asset
+    return toAssetObserver(result);
 };
 
 const describeSelectionTool: AssistantToolDefinition<SelectionToolArgs> = {
@@ -442,8 +557,134 @@ const describeAssetTreeTool: AssistantToolDefinition<AssetTreeArgs> = {
     }
 };
 
+const readScriptTool: AssistantToolDefinition<ScriptReadArgs> = {
+    name: 'read_script_asset',
+    description: 'Loads the current contents of a script asset so the assistant can reason about the existing code.',
+    parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['assetId'],
+        properties: {
+            assetId: {
+                type: 'number',
+                description: 'ID of the script asset to read.'
+            }
+        }
+    },
+    handler: async (rawArgs) => {
+        const assetId = typeof rawArgs?.assetId === 'number' ? rawArgs.assetId : null;
+        if (assetId === null) {
+            return {
+                error: 'assetId is required.'
+            };
+        }
+
+        try {
+            const asset = getScriptAsset(assetId);
+            const content = await fetchScriptContents(asset);
+            return {
+                asset: buildAssetSummary(asset),
+                length: content.length,
+                content
+            };
+        } catch (error) {
+            return {
+                error: formatError(error)
+            };
+        }
+    }
+};
+
+const writeScriptTool: AssistantToolDefinition<ScriptWriteArgs> = {
+    name: 'write_script_asset',
+    description: 'Creates a new script asset or overwrites an existing one with the provided contents.',
+    strict: false,
+    parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['contents'],
+        properties: {
+            assetId: {
+                type: ['number', 'null'],
+                description: 'Existing script asset id to overwrite. Leave null to create a new asset.'
+            },
+            folderId: {
+                type: ['number', 'null'],
+                description: 'Target folder id for new scripts. Defaults to the currently selected folder.'
+            },
+            filename: {
+                type: ['string', 'null'],
+                description: 'Filename for new scripts or to override the existing filename.'
+            },
+            contents: {
+                type: 'string',
+                description: 'Full script text that will be written to the asset.'
+            },
+            description: {
+                type: ['string', 'null'],
+                description: 'Optional human-readable summary of the change for logging or UI use.'
+            }
+        }
+    },
+    handler: async (rawArgs) => {
+        if (!editor.call('permissions:write')) {
+            return {
+                error: 'Write permission is required to modify script assets.'
+            };
+        }
+
+        if (!rawArgs || typeof rawArgs.contents !== 'string') {
+            return {
+                error: 'contents must be provided as a string.'
+            };
+        }
+
+        const normalizedContents = rawArgs.contents.replace(/\r\n?/g, '\n');
+        const filename = typeof rawArgs.filename === 'string' && rawArgs.filename.trim().length ? rawArgs.filename.trim() : null;
+        const assetId = typeof rawArgs.assetId === 'number' ? rawArgs.assetId : null;
+
+        try {
+            if (assetId !== null) {
+                const asset = getScriptAsset(assetId);
+                const updatedAsset = await updateScriptAsset(asset, normalizedContents, filename);
+                return {
+                    action: 'updated',
+                    asset: buildAssetSummary(updatedAsset),
+                    characters: normalizedContents.length,
+                    note: rawArgs.description || null
+                };
+            }
+
+            if (!filename) {
+                return {
+                    error: 'filename is required when creating a new script.'
+                };
+            }
+
+            const folder = resolveFolderFromId(typeof rawArgs.folderId === 'number' ? rawArgs.folderId : null);
+            const newAsset = await createScriptAsset(filename, normalizedContents, folder);
+            if (!newAsset) {
+                throw new Error('The new script asset could not be resolved after creation.');
+            }
+
+            return {
+                action: 'created',
+                asset: buildAssetSummary(newAsset),
+                characters: normalizedContents.length,
+                note: rawArgs.description || null
+            };
+        } catch (error) {
+            return {
+                error: formatError(error)
+            };
+        }
+    }
+};
+
 export const createAssistantTools = (): AssistantToolDefinition[] => [
     describeSelectionTool,
     describeEntityTreeTool,
-    describeAssetTreeTool
+    describeAssetTreeTool,
+    readScriptTool,
+    writeScriptTool
 ];
