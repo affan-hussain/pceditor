@@ -3003,17 +3003,13 @@ strong {
 }
 
 .pcui-panel.assistant-panel {
-    position: absolute;
-    bottom: 36px;
-    right: 4px;
-    width: 320px;
-    height: 320px;
-
-    &.pcui-collapsed {
-        width: 160px;
-    }
+    min-width: 0;
+    min-height: 0;
 
     > .pcui-panel-header {
+        letter-spacing: 0.08em;
+        font-size: 11px;
+
         &::before {
             content: '\E233';
         }
@@ -3022,29 +3018,89 @@ strong {
     > .pcui-panel-content {
         height: calc(100% - 32px);
         padding: 0;
+        background-color: $bcg-primary;
+        border: 1px solid $bcg-darkest;
+        border-top: none;
 
         > .assistant-panel__body {
             display: flex;
             flex-direction: column;
             height: 100%;
+            background-color: $bcg-primary;
         }
 
         .assistant-panel__messages {
             flex: 1;
-            padding: 8px;
+            padding: 0;
             overflow-y: auto;
             user-select: text;
             word-break: break-word;
-            background-color: $bcg-darker;
-            border-bottom: 1px solid $bcg-darkest;
+            background-color: $bcg-primary;
+        }
+
+        .assistant-panel__message {
+            display: flex;
+            gap: 12px;
+            padding: 10px 12px;
+            border-bottom: 1px solid $bcg-dark;
+            font-size: 12px;
+            line-height: 18px;
+            margin: 0;
+
+            &:last-child {
+                border-bottom: none;
+            }
+        }
+
+        .assistant-panel__message-label {
+            flex-shrink: 0;
+            width: 82px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: $text-secondary;
+            line-height: 18px;
+        }
+
+        .assistant-panel__message-text {
+            flex: 1;
+            margin: 0;
+            padding: 0;
+            border-radius: 0;
+            white-space: pre-wrap;
+            background: none;
+            color: $text-primary;
+        }
+
+        .assistant-panel__message--assistant {
+            .assistant-panel__message-text {
+                color: color.mix($text-secondary, $text-primary, 60%);
+            }
+        }
+
+        .assistant-panel__message--user {
+            .assistant-panel__message-label {
+                color: $text-active;
+            }
+
+            .assistant-panel__message-text {
+                color: $text-primary;
+            }
+        }
+
+        .assistant-panel__message--error {
+            .assistant-panel__message-text {
+                color: $error-secondary;
+            }
         }
 
         .assistant-panel__input-row {
             display: flex;
             gap: 8px;
-            padding: 8px;
-            border-top: 1px solid $bcg-darkest;
+            padding: 10px 12px 12px;
+            border-top: 1px solid $bcg-dark;
             align-items: flex-end;
+            background-color: color.mix($bcg-primary, $bcg-darkest, 60%);
         }
 
         .assistant-panel__input {
@@ -3052,55 +3108,14 @@ strong {
 
             input {
                 width: 100%;
+                background-color: $bcg-darkest;
+                border: 1px solid $bcg-dark;
             }
         }
 
         .assistant-panel__send {
             flex-shrink: 0;
-            min-width: 72px;
-        }
-
-        .assistant-panel__message {
-            font-size: 12px;
-            line-height: 16px;
-            margin-bottom: 10px;
-
-            &:last-child {
-                margin-bottom: 0;
-            }
-        }
-
-        .assistant-panel__message-label {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: $text-secondary;
-        }
-
-        .assistant-panel__message-text {
-            margin-top: 3px;
-            padding: 6px 8px;
-            border-radius: 4px;
-            white-space: pre-wrap;
-            background-color: $bcg-darkest;
-            color: $text-primary;
-        }
-
-        .assistant-panel__message--assistant {
-            .assistant-panel__message-text {
-                background-color: rgba($bcg-darkest, 0.75);
-            }
-        }
-
-        .assistant-panel__message--user {
-            .assistant-panel__message-label {
-                color: $text-primary;
-            }
-
-            .assistant-panel__message-text {
-                background-color: $text-active;
-                color: $text-primary;
-            }
+            min-width: 96px;
         }
     }
 }

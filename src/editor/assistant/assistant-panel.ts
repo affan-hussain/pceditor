@@ -13,30 +13,46 @@ type MessageHandle = {
 const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Ask clarifying questions before attempting risky edits.';
 
 editor.once('load', () => {
-    const viewport = editor.call('layout.viewport');
-    const assetPanel = editor.call('layout.assets');
+    const layoutRoot = editor.call('layout.root');
     const assistantClient = new AssistantClient({
         instructions: DEFAULT_ASSISTANT_INSTRUCTIONS,
         tools: createAssistantTools()
     });
     const assistantReady = assistantClient.isReady();
 
+    if (!layoutRoot) {
+        return;
+    }
+
+    const storedWidth = editor.call('localStorage:get', 'editor:layout:assistant:width');
+    const storedCollapse = editor.call('localStorage:get', 'editor:layout:assistant:collapse');
+
     const assistantPanel = new Panel({
-        class: 'assistant-panel',
-        collapsed: true,
+        id: 'layout-assistant',
+        class: ['assistant-panel', 'attributes'],
+        collapsed: storedCollapse ?? false,
         collapsible: true,
+        collapseHorizontally: true,
         headerText: 'AI ASSISTANT',
-        hidden: !editor.call('permissions:read') || editor.call('viewport:expand:state')
+        hidden: !editor.call('permissions:read') || editor.call('viewport:expand:state'),
+        panelType: 'normal',
+        scrollable: true,
+        resizable: 'left',
+        resizeMin: 256,
+        resizeMax: 512,
+        width: storedWidth ?? 320
     });
-    viewport.append(assistantPanel);
+    layoutRoot.append(assistantPanel);
 
-    const adjustPosition = () => {
-        assistantPanel.style.bottom = assetPanel.collapsed ? '36px' : '4px';
-    };
-
-    adjustPosition();
-    assetPanel.on('collapse', adjustPosition);
-    assetPanel.on('expand', adjustPosition);
+    assistantPanel.on('resize', () => {
+        editor.call('localStorage:set', 'editor:layout:assistant:width', assistantPanel.width);
+    });
+    assistantPanel.on('collapse', () => {
+        editor.call('localStorage:set', 'editor:layout:assistant:collapse', true);
+    });
+    assistantPanel.on('expand', () => {
+        editor.call('localStorage:set', 'editor:layout:assistant:collapse', false);
+    });
 
     editor.on('permissions:set', (level) => {
         assistantPanel.hidden = !level || editor.call('viewport:expand:state');
@@ -162,6 +178,10 @@ editor.once('load', () => {
             messageInput.focus(true);
         }, 200);
     });
+
+    if (window.innerWidth <= 720) {
+        assistantPanel.folded = true;
+    }
 
     editor.method('assistant:sendMessage', sendMessage);
 
