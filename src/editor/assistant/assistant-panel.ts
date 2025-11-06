@@ -137,7 +137,7 @@ editor.once('load', () => {
         wrapper.appendChild(label);
 
         const body = document.createElement('div');
-        body.classList.add('assistant-panel__message-text');
+        body.classList.add('assistant-panel__message-text', 'selectable');
         body.textContent = text;
         wrapper.appendChild(body);
 
