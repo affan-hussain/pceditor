@@ -1,4 +1,5 @@
 import { Panel, Container, TextAreaInput, Button } from '@playcanvas/pcui';
+import type { ResponseFunctionToolCall, ResponseInputItem } from 'openai/resources/responses/responses';
 
 import { AssistantClient } from '../../common/ai/assistant-client.ts';
 import { createAssistantTools } from './assistant-tools.ts';
@@ -10,8 +11,17 @@ type MessageHandle = {
     body: HTMLDivElement;
 };
 
+type MessageOptions = {
+    label?: string;
+    classes?: string[];
+    insertBefore?: HTMLElement | null;
+};
+
 const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Ask clarifying questions before attempting risky edits.';
 const MAX_INPUT_HEIGHT = 160;
+const TOOL_MESSAGE_LABEL = 'Assistant Tool';
+const TOOL_RUNNING_CLASS = 'assistant-panel__message--tool-running';
+const TOOL_FINISHED_CLASS = 'assistant-panel__message--tool-finished';
 
 editor.once('load', () => {
     const layoutRoot = editor.call('layout.root');
@@ -114,13 +124,16 @@ editor.once('load', () => {
     });
     inputRow.append(sendButton);
 
-    const addMessage = (role: MessageRole, text: string): MessageHandle => {
+    const addMessage = (role: MessageRole, text: string, options?: MessageOptions): MessageHandle => {
         const wrapper = document.createElement('div');
         wrapper.classList.add('assistant-panel__message', `assistant-panel__message--${role}`);
+        if (options?.classes?.length) {
+            wrapper.classList.add(...options.classes);
+        }
 
         const label = document.createElement('div');
         label.classList.add('assistant-panel__message-label');
-        label.textContent = role === 'user' ? 'You' : 'Assistant';
+        label.textContent = options?.label || (role === 'user' ? 'You' : 'Assistant');
         wrapper.appendChild(label);
 
         const body = document.createElement('div');
@@ -128,11 +141,51 @@ editor.once('load', () => {
         body.textContent = text;
         wrapper.appendChild(body);
 
-        messages.append(wrapper);
+        const target = messages.element;
+        if (options?.insertBefore && options.insertBefore.parentElement === target) {
+            target.insertBefore(wrapper, options.insertBefore);
+        } else {
+            target.appendChild(wrapper);
+        }
         messages.element.scrollTop = messages.element.scrollHeight;
         adjustInputHeight();
 
         return { wrapper, body };
+    };
+
+    const toolMessages = new Map<string, MessageHandle>();
+    let thinkingMessage: MessageHandle | null = null;
+
+    const callId = (call: ResponseFunctionToolCall) => call.call_id || call.id || '';
+
+    const showToolStart = (call: ResponseFunctionToolCall) => {
+        const text = `Running ${call.name}`;
+        const handle = addMessage('assistant', text, {
+            label: TOOL_MESSAGE_LABEL,
+            classes: ['assistant-panel__message--tool', TOOL_RUNNING_CLASS],
+            insertBefore: thinkingMessage?.wrapper || null
+        });
+        const id = callId(call);
+        if (id) {
+            toolMessages.set(id, handle);
+        }
+    };
+
+    const showToolResult = (call: ResponseFunctionToolCall, _output: ResponseInputItem.FunctionCallOutput) => {
+        const id = callId(call);
+        const handle = id ? toolMessages.get(id) : undefined;
+        const text = `Finished ${call.name}`;
+        const message = handle || addMessage('assistant', text, {
+            label: TOOL_MESSAGE_LABEL,
+            classes: ['assistant-panel__message--tool'],
+            insertBefore: thinkingMessage?.wrapper || null
+        });
+        message.body.textContent = text;
+        message.wrapper.classList.remove(TOOL_RUNNING_CLASS);
+        message.wrapper.classList.add('assistant-panel__message--tool', TOOL_FINISHED_CLASS);
+        if (id) {
+            toolMessages.delete(id);
+        }
     };
 
     const formatError = (error: unknown) => {
@@ -168,10 +221,14 @@ editor.once('load', () => {
         isSending = true;
         setSendingState(true);
 
-        const assistantMessage = addMessage('assistant', 'Thinking...');
+        thinkingMessage = addMessage('assistant', 'Thinking...');
+        const assistantMessage = thinkingMessage;
 
         try {
-            const result = await assistantClient.send(value);
+            const result = await assistantClient.send(value, {
+                onToolStart: showToolStart,
+                onToolResult: showToolResult
+            });
             assistantMessage.body.textContent = result.text || 'The assistant returned an empty reply.';
         } catch (error) {
             assistantMessage.body.textContent = `Unable to contact the assistant: ${formatError(error)}`;
@@ -179,6 +236,8 @@ editor.once('load', () => {
         } finally {
             isSending = false;
             setSendingState(false);
+            toolMessages.clear();
+            thinkingMessage = null;
         }
     };
 
