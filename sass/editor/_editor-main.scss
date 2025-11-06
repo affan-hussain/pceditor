@@ -3078,6 +3078,32 @@ strong {
             }
         }
 
+        .assistant-panel__message--tool {
+            border-left: 2px solid rgba($text-active, 0.6);
+            padding-left: 10px;
+
+            .assistant-panel__message-label {
+                color: $text-secondary;
+            }
+
+            .assistant-panel__message-text {
+                font-family: 'Lucida Console', Monaco, monospace;
+                color: $text-primary;
+            }
+        }
+
+        .assistant-panel__message--tool-running {
+            .assistant-panel__message-text {
+                color: $text-secondary;
+            }
+        }
+
+        .assistant-panel__message--tool-finished {
+            .assistant-panel__message-text {
+                color: $text-primary;
+            }
+        }
+
         .assistant-panel__message--user {
             .assistant-panel__message-label {
                 color: $text-active;

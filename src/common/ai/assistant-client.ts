@@ -45,6 +45,8 @@ export type AssistantClientOptions = {
 
 export type AssistantSendOptions = {
     signal?: AbortSignal;
+    onToolStart?: (call: ResponseFunctionToolCall) => void;
+    onToolResult?: (call: ResponseFunctionToolCall, output: ResponseInputItem.FunctionCallOutput) => void;
 };
 
 export type AssistantResult = {
@@ -207,7 +209,9 @@ export class AssistantClient {
                 const { reasoningItems, toolCalls } = AssistantClient.collectResponseArtifacts(response);
                 if (reasoningItems.length) {
                     this.conversation.push(...reasoningItems);
-                    this.requestHistory.push(...reasoningItems);
+                    if (toolCalls.length) {
+                        this.requestHistory.push(...reasoningItems);
+                    }
                 }
 
                 if (!toolCalls.length) {
@@ -238,9 +242,11 @@ export class AssistantClient {
                 for (const call of toolCalls) {
                     this.conversation.push(call);
                     this.requestHistory.push(call);
+                    options?.onToolStart?.(call);
                     const output = await this.invokeTool(call);
                     this.conversation.push(output);
                     this.requestHistory.push(output);
+                    options?.onToolResult?.(call, output);
                 }
             }
         } catch (error) {
