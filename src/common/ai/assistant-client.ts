@@ -52,7 +52,7 @@ export type AssistantResult = {
     response: Response;
 };
 
-const DEFAULT_MODEL = 'gpt-4.1-mini';
+const DEFAULT_MODEL = 'gpt-5';
 const DEFAULT_MAX_TOOL_ITERATIONS = 60;
 const DEFAULT_TOOL_PARAMETERS = {
     type: 'object',
