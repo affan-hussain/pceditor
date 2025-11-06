@@ -207,7 +207,9 @@ export class AssistantClient {
                 const { reasoningItems, toolCalls } = AssistantClient.collectResponseArtifacts(response);
                 if (reasoningItems.length) {
                     this.conversation.push(...reasoningItems);
-                    this.requestHistory.push(...reasoningItems);
+                    if (toolCalls.length) {
+                        this.requestHistory.push(...reasoningItems);
+                    }
                 }
 
                 if (!toolCalls.length) {
