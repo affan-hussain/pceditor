@@ -3105,11 +3105,24 @@ strong {
 
         .assistant-panel__input {
             flex: 1;
+            display: flex;
 
-            input {
+            input,
+            textarea {
                 width: 100%;
                 background-color: $bcg-darkest;
                 border: 1px solid $bcg-dark;
+                color: $text-primary;
+            }
+
+            textarea {
+                min-height: 48px;
+                max-height: 160px;
+                padding: 6px 8px;
+                line-height: 18px;
+                resize: none;
+                overflow-y: hidden;
+                box-sizing: border-box;
             }
         }
 

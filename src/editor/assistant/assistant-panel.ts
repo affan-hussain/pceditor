@@ -1,4 +1,4 @@
-import { Panel, Container, TextInput, Button } from '@playcanvas/pcui';
+import { Panel, Container, TextAreaInput, Button } from '@playcanvas/pcui';
 
 import { AssistantClient } from '../../common/ai/assistant-client.ts';
 import { createAssistantTools } from './assistant-tools.ts';
@@ -11,6 +11,7 @@ type MessageHandle = {
 };
 
 const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Ask clarifying questions before attempting risky edits.';
+const MAX_INPUT_HEIGHT = 160;
 
 editor.once('load', () => {
     const layoutRoot = editor.call('layout.root');
@@ -84,13 +85,28 @@ editor.once('load', () => {
     });
     container.append(inputRow);
 
-    const messageInput = new TextInput({
+    const messageInput = new TextAreaInput({
         keyChange: true,
         blurOnEnter: false,
-        placeholder: 'Describe what you need help with...'
+        placeholder: 'Describe what you need help with...',
+        resizable: 'none'
     });
     messageInput.class.add('assistant-panel__input');
     inputRow.append(messageInput);
+
+    const getTextArea = () => messageInput.element.querySelector('textarea') as HTMLTextAreaElement | null;
+
+    const adjustInputHeight = () => {
+        const textarea = getTextArea();
+        if (!textarea) {
+            return;
+        }
+        textarea.style.height = 'auto';
+        const contentHeight = textarea.scrollHeight;
+        const nextHeight = Math.min(MAX_INPUT_HEIGHT, contentHeight);
+        textarea.style.height = `${nextHeight}px`;
+        textarea.style.overflowY = contentHeight > MAX_INPUT_HEIGHT ? 'auto' : 'hidden';
+    };
 
     const sendButton = new Button({
         text: 'Send',
@@ -114,6 +130,7 @@ editor.once('load', () => {
 
         messages.append(wrapper);
         messages.element.scrollTop = messages.element.scrollHeight;
+        adjustInputHeight();
 
         return { wrapper, body };
     };
@@ -147,6 +164,7 @@ editor.once('load', () => {
 
         addMessage('user', value);
         messageInput.value = '';
+        adjustInputHeight();
         isSending = true;
         setSendingState(true);
 
@@ -166,6 +184,8 @@ editor.once('load', () => {
 
     sendButton.on('click', sendMessage);
 
+    messageInput.element.addEventListener('input', adjustInputHeight);
+
     messageInput.element.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -182,6 +202,8 @@ editor.once('load', () => {
     if (window.innerWidth <= 720) {
         assistantPanel.folded = true;
     }
+
+    adjustInputHeight();
 
     editor.method('assistant:sendMessage', sendMessage);
 
