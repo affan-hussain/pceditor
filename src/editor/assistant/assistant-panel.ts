@@ -22,14 +22,31 @@ const MAX_INPUT_HEIGHT = 160;
 const TOOL_MESSAGE_LABEL = 'Assistant Tool';
 const TOOL_RUNNING_CLASS = 'assistant-panel__message--tool-running';
 const TOOL_FINISHED_CLASS = 'assistant-panel__message--tool-finished';
+const ASSISTANT_DEBUG_KEY = 'editor:assistant:debugLogs';
 
 editor.once('load', () => {
     const layoutRoot = editor.call('layout.root');
+    const storedDebugPreference = editor.call('localStorage:get', ASSISTANT_DEBUG_KEY);
+    const assistantDebugEnabled = typeof storedDebugPreference === 'boolean' ? storedDebugPreference : true;
     const assistantClient = new AssistantClient({
         instructions: DEFAULT_ASSISTANT_INSTRUCTIONS,
-        tools: createAssistantTools()
+        tools: createAssistantTools(),
+        debug: assistantDebugEnabled
     });
     const assistantReady = assistantClient.isReady();
+
+    editor.method('assistant:setDebugLogging', (enabled?: boolean) => {
+        if (typeof enabled !== 'boolean') {
+            return assistantDebugEnabled;
+        }
+        editor.call('localStorage:set', ASSISTANT_DEBUG_KEY, enabled);
+        console.info(`[Assistant] Debug logging ${enabled ? 'enabled' : 'disabled'}. Reload the editor to apply the new preference.`);
+        return enabled;
+    });
+
+    if (assistantDebugEnabled) {
+        console.info('[Assistant] Debug logging is enabled. See developer tools for full request + tool payloads.');
+    }
 
     if (!layoutRoot) {
         return;

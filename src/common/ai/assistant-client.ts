@@ -7,7 +7,7 @@ import type {
     ResponseReasoningItem
 } from 'openai/resources/responses/responses';
 
-type AssistantRole = 'system' | 'developer' | 'user' | 'assistant';
+export type AssistantRole = 'system' | 'developer' | 'user' | 'assistant';
 
 type AssistantMessage = {
     role: AssistantRole;
@@ -15,8 +15,8 @@ type AssistantMessage = {
     type?: 'message';
 };
 
-type AssistantConversationItem = AssistantMessage | ResponseInputItem.FunctionCallOutput | ResponseFunctionToolCall | ResponseReasoningItem;
-type AssistantRequestItem = AssistantMessage | ResponseInputItem.FunctionCallOutput | ResponseFunctionToolCall | ResponseReasoningItem;
+export type AssistantConversationItem = AssistantMessage | ResponseInputItem.FunctionCallOutput | ResponseFunctionToolCall | ResponseReasoningItem;
+export type AssistantRequestItem = AssistantMessage | ResponseInputItem.FunctionCallOutput | ResponseFunctionToolCall | ResponseReasoningItem;
 
 export type AssistantToolResult = string | number | boolean | null | Record<string, unknown> | Array<unknown>;
 
@@ -30,6 +30,30 @@ export type AssistantToolDefinition<TArgs = Record<string, unknown>> = {
     handler: AssistantToolHandler<TArgs>;
 };
 
+export type AssistantDebugEvent =
+    | {
+        type: 'request';
+        iteration: number;
+        payload: AssistantRequestItem[];
+        conversation: AssistantConversationItem[];
+    }
+    | {
+        type: 'response';
+        iteration: number;
+        response: Response;
+    }
+    | {
+        type: 'tool';
+        phase: 'start' | 'result' | 'error';
+        call: ResponseFunctionToolCall;
+        args?: unknown;
+        result?: AssistantToolResult;
+        output?: string;
+        error?: string;
+    };
+
+export type AssistantDebugLogger = (event: AssistantDebugEvent) => void;
+
 export type AssistantClientOptions = {
     apiKey?: string | (() => Promise<string> | string);
     baseUrl?: string;
@@ -41,6 +65,8 @@ export type AssistantClientOptions = {
     tools?: AssistantToolDefinition[];
     parallelToolCalls?: boolean;
     maxToolIterations?: number;
+    debug?: boolean;
+    debugLogger?: AssistantDebugLogger;
 };
 
 export type AssistantSendOptions = {
@@ -81,7 +107,9 @@ const ENV_FALLBACKS: AssistantClientOptions = {
     headers: undefined,
     tools: undefined,
     parallelToolCalls: undefined,
-    maxToolIterations: undefined
+    maxToolIterations: undefined,
+    debug: undefined,
+    debugLogger: undefined
 };
 
 export class AssistantClient {
@@ -93,6 +121,8 @@ export class AssistantClient {
     private readonly functionTools?: FunctionTool[];
     private readonly maxToolIterations: number;
     private readonly parallelToolCalls: boolean;
+    private readonly debugEnabled: boolean;
+    private readonly debugLogger?: AssistantDebugLogger;
 
     constructor(options: AssistantClientOptions = {}) {
         const resolvedOptions: AssistantClientOptions = {
@@ -120,6 +150,8 @@ export class AssistantClient {
         })) : undefined;
         this.maxToolIterations = resolvedOptions.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
         this.parallelToolCalls = resolvedOptions.parallelToolCalls ?? false;
+        this.debugEnabled = !!resolvedOptions.debug;
+        this.debugLogger = resolvedOptions.debugLogger;
 
         if (this.options.instructions) {
             const systemMessage: AssistantMessage = {
@@ -195,6 +227,13 @@ export class AssistantClient {
             let iteration = 0;
 
             while (true) {
+                this.emitDebug({
+                    type: 'request',
+                    iteration,
+                    payload: AssistantClient.cloneForDebug(this.requestHistory),
+                    conversation: AssistantClient.cloneForDebug(this.conversation)
+                });
+
                 const response = await this.openai.responses.create({
                     model: this.options.model,
                     input: this.requestHistory,
@@ -204,6 +243,12 @@ export class AssistantClient {
                     } : {})
                 }, {
                     signal: options?.signal
+                });
+
+                this.emitDebug({
+                    type: 'response',
+                    iteration,
+                    response: AssistantClient.cloneForDebug(response)
                 });
 
                 const { reasoningItems, toolCalls } = AssistantClient.collectResponseArtifacts(response);
@@ -265,7 +310,14 @@ export class AssistantClient {
         }
 
         if (!tool) {
-            return AssistantClient.createToolOutput(callId, `Tool "${call.name}" is not available in this editor build.`);
+            const message = `Tool "${call.name}" is not available in this editor build.`;
+            this.emitDebug({
+                type: 'tool',
+                phase: 'error',
+                call,
+                error: message
+            });
+            return AssistantClient.createToolOutput(callId, message);
         }
 
         let parsedArguments: unknown = {};
@@ -273,15 +325,47 @@ export class AssistantClient {
             try {
                 parsedArguments = JSON.parse(call.arguments);
             } catch (error) {
-                return AssistantClient.createToolOutput(callId, `Unable to parse arguments for "${call.name}": ${AssistantClient.formatError(error)}.`);
+                const message = `Unable to parse arguments for "${call.name}": ${AssistantClient.formatError(error)}.`;
+                this.emitDebug({
+                    type: 'tool',
+                    phase: 'error',
+                    call,
+                    error: message
+                });
+                return AssistantClient.createToolOutput(callId, message);
             }
         }
 
+        const argsSnapshot = AssistantClient.cloneForDebug(parsedArguments);
+        this.emitDebug({
+            type: 'tool',
+            phase: 'start',
+            call,
+            args: argsSnapshot
+        });
+
         try {
             const result = await tool.handler(parsedArguments as Record<string, unknown>);
-            return AssistantClient.createToolOutput(callId, this.serializeToolResult(result));
+            const serializedResult = this.serializeToolResult(result);
+            this.emitDebug({
+                type: 'tool',
+                phase: 'result',
+                call,
+                args: argsSnapshot,
+                result: AssistantClient.cloneForDebug(result),
+                output: serializedResult
+            });
+            return AssistantClient.createToolOutput(callId, serializedResult);
         } catch (error) {
-            return AssistantClient.createToolOutput(callId, `Tool "${call.name}" failed: ${AssistantClient.formatError(error)}`);
+            const message = `Tool "${call.name}" failed: ${AssistantClient.formatError(error)}`;
+            this.emitDebug({
+                type: 'tool',
+                phase: 'error',
+                call,
+                args: argsSnapshot,
+                error: message
+            });
+            return AssistantClient.createToolOutput(callId, message);
         }
     }
 
@@ -360,5 +444,96 @@ export class AssistantClient {
             return error.trim();
         }
         return 'Unknown error';
+    }
+
+    private emitDebug(event: AssistantDebugEvent) {
+        if (!this.debugEnabled) {
+            return;
+        }
+
+        if (this.debugLogger) {
+            try {
+                this.debugLogger(event);
+            } catch (err) {
+                console.warn('Assistant debug logger failed', err);
+            }
+            return;
+        }
+
+        AssistantClient.defaultDebugLogger(event);
+    }
+
+    private static defaultDebugLogger(event: AssistantDebugEvent) {
+        const label = '[Assistant]';
+
+        if (event.type === 'request') {
+            if (typeof console.groupCollapsed === 'function') {
+                console.groupCollapsed(`${label} Request #${event.iteration}`);
+                console.log('requestHistory', event.payload);
+                console.log('conversation', event.conversation);
+                console.groupEnd();
+            } else {
+                console.log(`${label} Request #${event.iteration}`, event.payload, event.conversation);
+            }
+            return;
+        }
+
+        if (event.type === 'response') {
+            if (typeof console.groupCollapsed === 'function') {
+                console.groupCollapsed(`${label} Response #${event.iteration}`);
+                console.log(event.response);
+                console.groupEnd();
+            } else {
+                console.log(`${label} Response #${event.iteration}`, event.response);
+            }
+            return;
+        }
+
+        const phaseLabel = event.phase === 'result' ? 'Tool result' : event.phase === 'error' ? 'Tool error' : 'Tool start';
+        if (typeof console.groupCollapsed === 'function') {
+            console.groupCollapsed(`${label} ${phaseLabel}: ${event.call.name}`);
+            if (event.args !== undefined) {
+                console.log('args', event.args);
+            }
+            if (event.result !== undefined) {
+                console.log('result', event.result);
+            }
+            if (event.output !== undefined) {
+                console.log('output', event.output);
+            }
+            if (event.error) {
+                console.warn('error', event.error);
+            }
+            console.groupEnd();
+        } else {
+            console.log(`${label} ${phaseLabel}: ${event.call.name}`, {
+                args: event.args,
+                result: event.result,
+                output: event.output,
+                error: event.error
+            });
+        }
+    }
+
+    private static cloneForDebug<T>(value: T): T {
+        // Attempt to capture a snapshot so later mutations do not change console logs.
+        if (typeof structuredClone === 'function') {
+            try {
+                return structuredClone(value);
+            } catch (error) {
+                // Fallback to JSON serialization below.
+            }
+        }
+
+        try {
+            return JSON.parse(JSON.stringify(value, (_key, entry) => {
+                if (typeof entry === 'bigint') {
+                    return Number(entry);
+                }
+                return entry;
+            }));
+        } catch (error) {
+            return value;
+        }
     }
 }
