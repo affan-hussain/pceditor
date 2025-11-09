@@ -1,8 +1,8 @@
 import { Panel, Container, TextAreaInput, Button } from '@playcanvas/pcui';
 import type { ResponseFunctionToolCall, ResponseInputItem } from 'openai/resources/responses/responses';
 
-import { AssistantClient } from '../../common/ai/assistant-client.ts';
 import { createAssistantTools } from './assistant-tools.ts';
+import { AssistantClient } from '../../common/ai/assistant-client.ts';
 
 type MessageRole = 'user' | 'assistant';
 
@@ -17,7 +17,7 @@ type MessageOptions = {
     insertBefore?: HTMLElement | null;
 };
 
-const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Ask clarifying questions before attempting risky edits.';
+const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Keep going until the task is complete. Try your hardest!';
 const MAX_INPUT_HEIGHT = 160;
 const TOOL_MESSAGE_LABEL = 'Assistant Tool';
 const TOOL_RUNNING_CLASS = 'assistant-panel__message--tool-running';
@@ -265,7 +265,7 @@ editor.once('load', () => {
     messageInput.element.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
-            void sendMessage();
+            sendMessage();
         }
     });
 
