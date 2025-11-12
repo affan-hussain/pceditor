@@ -14,7 +14,7 @@ type EntityTreeArgs = {
 };
 
 type EntityComponentArgs = {
-    entityId: number;
+    entityId: number | string;
     componentNames?: string[] | null;
     includeScriptAttributes?: boolean | null;
     includeFullComponentData?: boolean | null;
@@ -53,6 +53,17 @@ const clampNumber = (value: unknown, fallback: number, min = 1, max = MAX_LIMIT)
         return fallback;
     }
     return Math.min(max, Math.max(min, value));
+};
+
+const normalizeEntityId = (value: unknown): number | string | null => {
+    if (typeof value === 'number') {
+        return Number.isNaN(value) ? null : value;
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed : null;
+    }
+    return null;
 };
 
 const toStringArray = (value: unknown): string[] => {
@@ -544,8 +555,8 @@ const describeEntityComponentsTool: AssistantToolDefinition<EntityComponentArgs>
         required: ['entityId', 'componentNames', 'includeScriptAttributes', 'includeFullComponentData'],
         properties: {
             entityId: {
-                type: 'number',
-                description: 'resource_id of the entity returned by describe_current_selection.'
+                type: ['number', 'string'],
+                description: 'resource_id or GUID of the entity returned by describe_current_selection.'
             },
             componentNames: {
                 type: ['array', 'null'],
@@ -565,16 +576,17 @@ const describeEntityComponentsTool: AssistantToolDefinition<EntityComponentArgs>
         }
     },
     handler: (rawArgs) => {
-        if (!rawArgs || typeof rawArgs.entityId !== 'number' || Number.isNaN(rawArgs.entityId)) {
+        const entityId = normalizeEntityId(rawArgs?.entityId);
+        if (entityId === null) {
             return {
                 error: 'entityId is required.'
             };
         }
 
-        const entity = editor.call('entities:get', rawArgs.entityId) as Observer | null;
+        const entity = editor.call('entities:get', entityId) as Observer | null;
         if (!entity) {
             return {
-                error: `No entity found with id ${rawArgs.entityId}.`
+                error: `No entity found with id ${entityId}.`
             };
         }
 
