@@ -13,6 +13,13 @@ type EntityTreeArgs = {
     includeComponents?: boolean;
 };
 
+type EntityComponentArgs = {
+    entityId: number | string;
+    componentNames?: string[] | null;
+    includeScriptAttributes?: boolean | null;
+    includeFullComponentData?: boolean | null;
+};
+
 type AssetTreeArgs = {
     maxSiblings?: number;
     maxChildren?: number;
@@ -37,12 +44,26 @@ const DEFAULT_ASSET_SIBLING_LIMIT = 6;
 const MAX_LIMIT = 20;
 const MAX_DEPTH = 5;
 const MAX_PARENT_TRAVERSAL = 64;
+const MAX_COMPONENT_DEPTH = 5;
+const MAX_COMPONENT_BREADTH = 40;
+const MAX_SCRIPT_SUMMARY = 25;
 
 const clampNumber = (value: unknown, fallback: number, min = 1, max = MAX_LIMIT) => {
     if (typeof value !== 'number' || Number.isNaN(value)) {
         return fallback;
     }
     return Math.min(max, Math.max(min, value));
+};
+
+const normalizeEntityId = (value: unknown): number | string | null => {
+    if (typeof value === 'number') {
+        return Number.isNaN(value) ? null : value;
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed : null;
+    }
+    return null;
 };
 
 const toStringArray = (value: unknown): string[] => {
@@ -174,8 +195,10 @@ const buildAssetSummary = (asset: Observer) => {
     const tags = toStringArray(asset.get('tags'));
     const file = asset.get('file');
     const pathNodes = buildAssetPathNodes(asset);
-    const folderNames = pathNodes.map((node) => node.name);
+    const folderNames = pathNodes.map(node => node.name);
     const displayName = asset.get('name') || '(Untitled asset)';
+    const fullPath = [...folderNames, displayName].filter(Boolean).join('/');
+    const virtualPath = fullPath ? `/${fullPath}` : `/${displayName}`;
 
     const summary: Record<string, unknown> = {
         id: asset.get('id'),
@@ -183,7 +206,7 @@ const buildAssetSummary = (asset: Observer) => {
         type: asset.get('type'),
         tags,
         path: folderNames,
-        virtualPath: `/${[...folderNames, displayName].filter(Boolean).join('/')}` || `/${displayName}`,
+        virtualPath,
         preload: !!asset.get('preload')
     };
 
@@ -197,6 +220,166 @@ const buildAssetSummary = (asset: Observer) => {
     }
 
     return summary;
+};
+
+const sanitizeValue = (value: unknown, depth = MAX_COMPONENT_DEPTH): unknown => {
+    if (depth <= 0) {
+        return '[max-depth]';
+    }
+
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    const valueType = typeof value;
+    if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') {
+        return value;
+    }
+
+    if (valueType === 'bigint') {
+        return Number(value);
+    }
+
+    if (valueType === 'function') {
+        return `[function ${value.name || 'anonymous'}]`;
+    }
+
+    if (Array.isArray(value)) {
+        return value.slice(0, MAX_COMPONENT_BREADTH).map(entry => sanitizeValue(entry, depth - 1));
+    }
+
+    if (valueType === 'object') {
+        const maybeObserver = value as { json?: () => unknown };
+        const plain = typeof maybeObserver.json === 'function' ? maybeObserver.json() : value;
+        if (!plain || typeof plain !== 'object') {
+            return null;
+        }
+
+        const entries = Object.entries(plain).slice(0, MAX_COMPONENT_BREADTH);
+        const result: Record<string, unknown> = {};
+        for (const [key, entryValue] of entries) {
+            result[key] = sanitizeValue(entryValue, depth - 1);
+        }
+        return result;
+    }
+
+    return null;
+};
+
+const normalizeComponentFilter = (value: unknown): string[] | null => {
+    const entries = toStringArray(value).map(name => name.trim()).filter(Boolean);
+    if (!entries.length) {
+        return null;
+    }
+    return Array.from(new Set(entries));
+};
+
+const buildComponentSummary = (componentData: unknown, includeFullData: boolean) => {
+    if (!componentData || typeof componentData !== 'object') {
+        return {
+            present: !!componentData
+        };
+    }
+
+    const componentRecord = componentData as Record<string, unknown>;
+    const summary: Record<string, unknown> = {
+        propertyCount: Object.keys(componentRecord).length
+    };
+
+    if (Object.prototype.hasOwnProperty.call(componentRecord, 'enabled')) {
+        const enabled = componentRecord.enabled;
+        if (typeof enabled === 'boolean') {
+            summary.enabled = enabled;
+        }
+    }
+
+    if (includeFullData) {
+        summary.data = sanitizeValue(componentData);
+    }
+
+    return summary;
+};
+
+const buildScriptInstanceSummary = (
+    scriptName: string,
+    rawData: Record<string, unknown> | undefined,
+    orderIndex: number,
+    includeAttributes: boolean
+) => {
+    const data = rawData && typeof rawData === 'object' ? rawData : {};
+    const dataRecord = data as Record<string, unknown>;
+    const attributes = dataRecord.attributes && typeof dataRecord.attributes === 'object' ? dataRecord.attributes as Record<string, unknown> : null;
+    const attributeNames = attributes ? Object.keys(attributes) : [];
+    const attributeCount = attributeNames.length;
+    const asset = editor.call('assets:scripts:assetByScript', scriptName) as Observer | null;
+    const collisions = editor.call('assets:scripts:collide', scriptName) as Record<string, Observer> | null | undefined;
+    const collisionIds = collisions ? Object.keys(collisions) : [];
+
+    const summary: Record<string, unknown> = {
+        name: scriptName,
+        enabled: typeof dataRecord.enabled === 'boolean' ? dataRecord.enabled : true,
+        orderIndex: orderIndex >= 0 ? orderIndex : null,
+        attributeCount,
+        asset: asset ? buildAssetSummary(asset) : null
+    };
+
+    if (attributeCount) {
+        if (includeAttributes && attributes) {
+            summary.attributes = sanitizeValue(attributes, 4);
+        } else {
+            summary.attributeNames = attributeNames;
+        }
+    }
+
+    if (Array.isArray(dataRecord.attributesOrder)) {
+        summary.attributeOrder = dataRecord.attributesOrder;
+    }
+
+    if (collisionIds.length) {
+        summary.assetCollisions = collisionIds.map((key) => {
+            const numeric = Number(key);
+            return Number.isNaN(numeric) ? key : numeric;
+        });
+    }
+
+    const warnings: string[] = [];
+    if (!asset) {
+        warnings.push('Script object is not linked to a preloaded script asset.');
+    }
+    if (collisionIds.length) {
+        warnings.push('Script name collides with multiple assets.');
+    }
+    if (warnings.length) {
+        summary.warnings = warnings;
+    }
+
+    return summary;
+};
+
+const buildScriptComponentSummary = (entity: Observer, includeAttributes: boolean) => {
+    const scriptComponent = entity.get('components.script');
+    if (!scriptComponent || typeof scriptComponent !== 'object') {
+        return null;
+    }
+
+    const scriptRecord = scriptComponent as Record<string, unknown>;
+
+    const scripts = entity.get('components.script.scripts') as Record<string, Record<string, unknown> | undefined> | null;
+    const order = entity.get('components.script.order');
+    const orderList = Array.isArray(order) ? order.filter((entry): entry is string => typeof entry === 'string') : [];
+    const scriptNames = scripts && typeof scripts === 'object' ? Object.keys(scripts) : [];
+    const combinedNames = Array.from(new Set([...orderList, ...scriptNames]));
+    const truncated = combinedNames.length > MAX_SCRIPT_SUMMARY ? combinedNames.length - MAX_SCRIPT_SUMMARY : 0;
+    const visibleNames = combinedNames.slice(0, MAX_SCRIPT_SUMMARY);
+    const scriptSummaries = visibleNames.map(name => buildScriptInstanceSummary(name, scripts?.[name], orderList.indexOf(name), includeAttributes));
+
+    return {
+        enabled: scriptRecord.enabled !== false,
+        totalScripts: combinedNames.length,
+        truncatedScripts: truncated || undefined,
+        order: orderList,
+        scripts: scriptSummaries
+    };
 };
 
 type AssetCandidate = Observer | { observer?: Observer } | null | undefined;
@@ -341,7 +524,7 @@ const describeSelectionTool: AssistantToolDefinition<SelectionToolArgs> = {
                 selectionType,
                 totalSelected: items.length,
                 truncated: items.length > maxItems,
-                items: items.slice(0, maxItems).map((entity) => buildEntitySummary(entity, includeComponents))
+                items: items.slice(0, maxItems).map(entity => buildEntitySummary(entity, includeComponents))
             };
         }
 
@@ -350,7 +533,7 @@ const describeSelectionTool: AssistantToolDefinition<SelectionToolArgs> = {
                 selectionType,
                 totalSelected: items.length,
                 truncated: items.length > maxItems,
-                items: items.slice(0, maxItems).map((asset) => buildAssetSummary(asset))
+                items: items.slice(0, maxItems).map(asset => buildAssetSummary(asset))
             };
         }
 
@@ -359,6 +542,94 @@ const describeSelectionTool: AssistantToolDefinition<SelectionToolArgs> = {
             totalSelected: items.length,
             items: [],
             message: `Selection type "${selectionType}" is not supported yet.`
+        };
+    }
+};
+
+const describeEntityComponentsTool: AssistantToolDefinition<EntityComponentArgs> = {
+    name: 'describe_entity_components',
+    description: 'Returns sanitized component data for a specific entity so the assistant can inspect script bindings and related settings.',
+    parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['entityId', 'componentNames', 'includeScriptAttributes', 'includeFullComponentData'],
+        properties: {
+            entityId: {
+                type: ['number', 'string'],
+                description: 'resource_id or GUID of the entity returned by describe_current_selection.'
+            },
+            componentNames: {
+                type: ['array', 'null'],
+                items: {
+                    type: 'string'
+                },
+                description: 'Optional list of component names to include. Defaults to all components.'
+            },
+            includeScriptAttributes: {
+                type: ['boolean', 'null'],
+                description: 'Include full attribute payloads for each script instance. Defaults to false to save tokens.'
+            },
+            includeFullComponentData: {
+                type: ['boolean', 'null'],
+                description: 'Include sanitized payloads for non-script components. Defaults to false so only summaries are returned.'
+            }
+        }
+    },
+    handler: (rawArgs) => {
+        const entityId = normalizeEntityId(rawArgs?.entityId);
+        if (entityId === null) {
+            return {
+                error: 'entityId is required.'
+            };
+        }
+
+        const entity = editor.call('entities:get', entityId) as Observer | null;
+        if (!entity) {
+            return {
+                error: `No entity found with id ${entityId}.`
+            };
+        }
+
+        const componentFilter = normalizeComponentFilter(rawArgs.componentNames);
+        const includeScriptAttributes = typeof rawArgs.includeScriptAttributes === 'boolean' ? rawArgs.includeScriptAttributes : false;
+        const includeFullComponentData = typeof rawArgs.includeFullComponentData === 'boolean' ? rawArgs.includeFullComponentData : false;
+        const shouldInclude = (name: string) => !componentFilter || componentFilter.includes(name);
+
+        const components = entity.get('components');
+        const componentMap = components && typeof components === 'object' ? components as Record<string, unknown> : null;
+        const availableComponents = componentMap ? Object.keys(componentMap) : [];
+        const payload: Record<string, unknown> = {};
+
+        if (shouldInclude('script')) {
+            payload.script = buildScriptComponentSummary(entity, includeScriptAttributes);
+        }
+
+        if (componentMap) {
+            for (const name of availableComponents) {
+                if (name === 'script') {
+                    continue;
+                }
+                if (!shouldInclude(name)) {
+                    continue;
+                }
+                payload[name] = buildComponentSummary(componentMap[name], includeFullComponentData);
+            }
+        }
+
+        const missingComponents = componentFilter ? componentFilter.filter(name => name !== 'script' && !availableComponents.includes(name)) : [];
+        if (componentFilter && componentFilter.includes('script')) {
+            const hasScript = !!(componentMap && (componentMap as Record<string, unknown>).script);
+            if (!hasScript) {
+                missingComponents.push('script');
+            }
+        }
+
+        return {
+            entity: buildEntitySummary(entity, false),
+            availableComponents,
+            requestedComponents: componentFilter,
+            missingComponents: missingComponents.length ? missingComponents : undefined,
+            components: payload
         };
     }
 };
@@ -683,6 +954,7 @@ const writeScriptTool: AssistantToolDefinition<ScriptWriteArgs> = {
 
 export const createAssistantTools = (): AssistantToolDefinition[] => [
     describeSelectionTool,
+    describeEntityComponentsTool,
     describeEntityTreeTool,
     describeAssetTreeTool,
     readScriptTool,

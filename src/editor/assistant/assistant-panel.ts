@@ -1,8 +1,8 @@
 import { Panel, Container, TextAreaInput, Button } from '@playcanvas/pcui';
 import type { ResponseFunctionToolCall, ResponseInputItem } from 'openai/resources/responses/responses';
 
-import { AssistantClient } from '../../common/ai/assistant-client.ts';
 import { createAssistantTools } from './assistant-tools.ts';
+import { AssistantClient } from '../../common/ai/assistant-client.ts';
 
 type MessageRole = 'user' | 'assistant';
 
@@ -17,19 +17,36 @@ type MessageOptions = {
     insertBefore?: HTMLElement | null;
 };
 
-const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Ask clarifying questions before attempting risky edits.';
+const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Keep going until the task is complete. Try your hardest!';
 const MAX_INPUT_HEIGHT = 160;
 const TOOL_MESSAGE_LABEL = 'Assistant Tool';
 const TOOL_RUNNING_CLASS = 'assistant-panel__message--tool-running';
 const TOOL_FINISHED_CLASS = 'assistant-panel__message--tool-finished';
+const ASSISTANT_DEBUG_KEY = 'editor:assistant:debugLogs';
 
 editor.once('load', () => {
     const layoutRoot = editor.call('layout.root');
+    const storedDebugPreference = editor.call('localStorage:get', ASSISTANT_DEBUG_KEY);
+    const assistantDebugEnabled = typeof storedDebugPreference === 'boolean' ? storedDebugPreference : true;
     const assistantClient = new AssistantClient({
         instructions: DEFAULT_ASSISTANT_INSTRUCTIONS,
-        tools: createAssistantTools()
+        tools: createAssistantTools(),
+        debug: assistantDebugEnabled
     });
     const assistantReady = assistantClient.isReady();
+
+    editor.method('assistant:setDebugLogging', (enabled?: boolean) => {
+        if (typeof enabled !== 'boolean') {
+            return assistantDebugEnabled;
+        }
+        editor.call('localStorage:set', ASSISTANT_DEBUG_KEY, enabled);
+        console.info(`[Assistant] Debug logging ${enabled ? 'enabled' : 'disabled'}. Reload the editor to apply the new preference.`);
+        return enabled;
+    });
+
+    if (assistantDebugEnabled) {
+        console.info('[Assistant] Debug logging is enabled. See developer tools for full request + tool payloads.');
+    }
 
     if (!layoutRoot) {
         return;
@@ -248,7 +265,7 @@ editor.once('load', () => {
     messageInput.element.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
-            void sendMessage();
+            sendMessage();
         }
     });
 
