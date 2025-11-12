@@ -106,7 +106,7 @@ const resolveFolderFromId = (folderId?: number | null) => {
 
 const updateScriptAsset = async (asset: Observer, contents: string, overrideFilename?: string | null) => {
     const currentFilename = asset.get('file')?.filename;
-    const filename = (overrideFilename && overrideFilename.trim()) || currentFilename || `${asset.get('name') || 'script'}.js`;
+    const filename = (overrideFilename && overrideFilename.trim()) || currentFilename || `${asset.get('name') || 'script'}.mjs`;
     const blob = new Blob([contents], { type: scriptMimeFromFilename(filename) });
 
     const updated = await editor.api.globals.assets.upload({
@@ -417,7 +417,7 @@ const readScriptTool: AssistantToolDefinition<ScriptReadArgs> = {
 
 const writeScriptTool: AssistantToolDefinition<ScriptWriteArgs> = {
     name: 'write_script_asset',
-    description: 'Creates a new script asset or overwrites an existing one with the provided contents.',
+    description: 'Creates a new script asset or overwrites an existing one with the provided contents. All scripts must be authored as PlayCanvas ESM modules: use the `.mjs` extension, import { Script } from \'playcanvas\', export one or more classes that extend Script, and set static scriptName on every exported class. Avoid legacy pc.createScript patterns—always rely on ES module syntax (imports/exports) so multiple classes can be exported from a single file when needed.',
     strict: false,
     parameters: {
         type: 'object',
