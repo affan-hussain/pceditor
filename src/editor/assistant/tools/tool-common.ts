@@ -19,8 +19,10 @@ export const MAX_STAT_ENTRIES = 10;
 export const MAX_SCRIPT_SUMMARY = 25;
 export const MAX_UPDATE_DEPTH = 8;
 export const MAX_SCRIPT_CONFIGS = 10;
+export const MAX_COMPONENT_CONFIGS = 10;
 export const MAX_SCRIPT_ATTRIBUTE_REMOVALS = 20;
 export const MAX_SCRIPT_ATTRIBUTE_UPDATES = 40;
+export const MAX_COMPONENT_PROPERTY_UPDATES = 60;
 export const MAX_MATERIAL_UPDATES = 80;
 export const MAX_DATA_REMOVALS = 40;
 
