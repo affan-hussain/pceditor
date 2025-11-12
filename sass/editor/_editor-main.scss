@@ -3129,6 +3129,12 @@ strong {
             background-color: color.mix($bcg-primary, $bcg-darkest, 60%);
         }
 
+        .assistant-panel__button-column {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
         .assistant-panel__input {
             flex: 1;
             display: flex;
@@ -3152,9 +3158,11 @@ strong {
             }
         }
 
+        .assistant-panel__new-chat,
         .assistant-panel__send {
             flex-shrink: 0;
             min-width: 96px;
+            width: 100%;
         }
     }
 }

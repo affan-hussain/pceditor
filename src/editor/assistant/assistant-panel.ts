@@ -139,7 +139,19 @@ editor.once('load', () => {
         text: 'Send',
         class: 'assistant-panel__send'
     });
-    inputRow.append(sendButton);
+
+    const newChatButton = new Button({
+        text: 'New Chat',
+        class: 'assistant-panel__new-chat'
+    });
+
+    const buttonColumn = new Container({
+        class: 'assistant-panel__button-column'
+    });
+    buttonColumn.append(newChatButton);
+    buttonColumn.append(sendButton);
+
+    inputRow.append(buttonColumn);
 
     const addMessage = (role: MessageRole, text: string, options?: MessageOptions): MessageHandle => {
         const wrapper = document.createElement('div');
@@ -218,9 +230,35 @@ editor.once('load', () => {
     const setSendingState = (sending: boolean) => {
         sendButton.enabled = assistantReady && !sending;
         messageInput.readOnly = sending;
+        newChatButton.enabled = !sending;
     };
 
     let isSending = false;
+
+    const showAssistantAvailabilityMessage = () => {
+        if (assistantReady) {
+            addMessage('assistant', 'Hi! I\'m the PlayCanvas assistant. Let me know what you need help with and I\'ll reason over your project.');
+        } else {
+            sendButton.enabled = false;
+            messageInput.readOnly = true;
+            addMessage('assistant', 'Assistant backend is not configured. Set OPENAI_* environment variables (e.g. OPENAI_API_KEY) before building to enable this panel.');
+        }
+    };
+
+    const startNewChat = () => {
+        if (isSending) {
+            return;
+        }
+
+        assistantClient.resetConversation();
+        toolMessages.clear();
+        thinkingMessage = null;
+        messages.element.innerHTML = '';
+        messageInput.value = '';
+        adjustInputHeight();
+        showAssistantAvailabilityMessage();
+        messageInput.focus(true);
+    };
 
     const sendMessage = async () => {
         if (!assistantReady || isSending) {
@@ -258,6 +296,7 @@ editor.once('load', () => {
         }
     };
 
+    newChatButton.on('click', startNewChat);
     sendButton.on('click', sendMessage);
 
     messageInput.element.addEventListener('input', adjustInputHeight);
@@ -283,11 +322,5 @@ editor.once('load', () => {
 
     editor.method('assistant:sendMessage', sendMessage);
 
-    if (assistantReady) {
-        addMessage('assistant', 'Hi! I\'m the PlayCanvas assistant. Let me know what you need help with and I\'ll reason over your project.');
-    } else {
-        sendButton.enabled = false;
-        messageInput.readOnly = true;
-        addMessage('assistant', 'Assistant backend is not configured. Set OPENAI_* environment variables (e.g. OPENAI_API_KEY) before building to enable this panel.');
-    }
+    showAssistantAvailabilityMessage();
 });
