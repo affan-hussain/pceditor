@@ -194,6 +194,10 @@ export class AssistantClient {
         return !!this.openai;
     }
 
+    getRequestHistory(): AssistantRequestItem[] {
+        return AssistantClient.cloneForDebug(this.requestHistory);
+    }
+
     resetConversation() {
         this.conversation = [];
         this.requestHistory = [];

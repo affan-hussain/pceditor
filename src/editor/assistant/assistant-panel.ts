@@ -2,6 +2,7 @@ import { Panel, Container, TextAreaInput, Button } from '@playcanvas/pcui';
 import type { ResponseFunctionToolCall, ResponseInputItem } from 'openai/resources/responses/responses';
 
 import { createAssistantTools } from './assistant-tools.ts';
+import { calculateContextTokenUsage, CONTEXT_WINDOW_TOKENS } from './context-usage.ts';
 import { AssistantClient } from '../../common/ai/assistant-client.ts';
 
 type MessageRole = 'user' | 'assistant';
@@ -106,6 +107,37 @@ editor.once('load', () => {
         class: 'assistant-panel__messages'
     });
     container.append(messages);
+
+    const statusRow = new Container({
+        class: 'assistant-panel__status-row'
+    });
+    const contextHeader = document.createElement('div');
+    contextHeader.classList.add('assistant-panel__context-header');
+
+    const contextLabel = document.createElement('span');
+    contextLabel.textContent = 'Context Usage';
+    contextHeader.appendChild(contextLabel);
+
+    const contextPercent = document.createElement('span');
+    contextPercent.classList.add('assistant-panel__context-percent');
+    contextPercent.textContent = '0%';
+    contextHeader.appendChild(contextPercent);
+
+    const contextMeter = document.createElement('div');
+    contextMeter.classList.add('assistant-panel__context-meter');
+
+    const contextMeterFill = document.createElement('div');
+    contextMeterFill.classList.add('assistant-panel__context-meter-fill');
+    contextMeter.appendChild(contextMeterFill);
+
+    const contextDetails = document.createElement('div');
+    contextDetails.classList.add('assistant-panel__context-details');
+    contextDetails.textContent = `0 / ${CONTEXT_WINDOW_TOKENS.toLocaleString()} tokens`;
+
+    statusRow.element.appendChild(contextHeader);
+    statusRow.element.appendChild(contextMeter);
+    statusRow.element.appendChild(contextDetails);
+    container.append(statusRow);
 
     const inputRow = new Container({
         class: 'assistant-panel__input-row'
@@ -235,6 +267,31 @@ editor.once('load', () => {
 
     let isSending = false;
 
+    const formatContextDetails = (tokens: number, limit: number) => {
+        const formattedTokens = tokens.toLocaleString();
+        const formattedLimit = limit.toLocaleString();
+        return `${formattedTokens} / ${formattedLimit} tokens`;
+    };
+
+    const updateContextUsage = () => {
+        try {
+            const history = assistantClient.getRequestHistory();
+            const usage = calculateContextTokenUsage(history);
+            const percent = Math.min(100, Math.round(usage.percent));
+            contextPercent.textContent = `${percent}%`;
+            contextMeterFill.style.width = `${Math.min(100, usage.percent).toFixed(2)}%`;
+            contextMeterFill.classList.toggle('assistant-panel__context-meter-fill--warn', usage.percent >= 70 && usage.percent < 90);
+            contextMeterFill.classList.toggle('assistant-panel__context-meter-fill--alert', usage.percent >= 90);
+            contextDetails.textContent = formatContextDetails(usage.tokens, usage.limit);
+        } catch (error) {
+            contextPercent.textContent = '--';
+            contextMeterFill.style.width = '0%';
+            contextMeterFill.classList.remove('assistant-panel__context-meter-fill--warn', 'assistant-panel__context-meter-fill--alert');
+            contextDetails.textContent = 'Unable to estimate context size';
+            console.warn('Assistant context usage update failed', error);
+        }
+    };
+
     const showAssistantAvailabilityMessage = () => {
         if (assistantReady) {
             addMessage('assistant', 'Hi! I\'m the PlayCanvas assistant. Let me know what you need help with and I\'ll reason over your project.');
@@ -256,6 +313,7 @@ editor.once('load', () => {
         messages.element.innerHTML = '';
         messageInput.value = '';
         adjustInputHeight();
+        updateContextUsage();
         showAssistantAvailabilityMessage();
         messageInput.focus(true);
     };
@@ -293,6 +351,7 @@ editor.once('load', () => {
             setSendingState(false);
             toolMessages.clear();
             thinkingMessage = null;
+            updateContextUsage();
         }
     };
 
@@ -322,5 +381,6 @@ editor.once('load', () => {
 
     editor.method('assistant:sendMessage', sendMessage);
 
+    updateContextUsage();
     showAssistantAvailabilityMessage();
 });

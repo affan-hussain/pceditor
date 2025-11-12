@@ -3120,6 +3120,56 @@ strong {
             }
         }
 
+        .assistant-panel__status-row {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 8px 12px 10px;
+            border-top: 1px solid $bcg-dark;
+            background-color: color.mix($bcg-primary, $bcg-darkest, 70%);
+        }
+
+        .assistant-panel__context-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: $text-secondary;
+        }
+
+        .assistant-panel__context-percent {
+            color: $text-primary;
+        }
+
+        .assistant-panel__context-meter {
+            width: 100%;
+            height: 6px;
+            border-radius: 6px;
+            background-color: rgba($text-secondary, 0.2);
+            overflow: hidden;
+        }
+
+        .assistant-panel__context-meter-fill {
+            width: 0%;
+            height: 100%;
+            background-color: $text-active;
+            transition: width 0.2s ease;
+        }
+
+        .assistant-panel__context-meter-fill--warn {
+            background-color: color.mix($error-secondary, $text-active, 40%);
+        }
+
+        .assistant-panel__context-meter-fill--alert {
+            background-color: $error-secondary;
+        }
+
+        .assistant-panel__context-details {
+            font-size: 11px;
+            color: color.mix($text-secondary, $text-primary, 60%);
+        }
+
         .assistant-panel__input-row {
             display: flex;
             gap: 8px;
