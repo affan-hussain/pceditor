@@ -90,6 +90,44 @@ const scriptMimeFromFilename = (filename: string) => {
     return 'text/plain';
 };
 
+const DEFAULT_SCRIPT_FOLDER_NAME = 'scripts';
+
+const normalizeFolderName = (value: unknown) => {
+    return typeof value === 'string' ? value.trim().toLowerCase() : '';
+};
+
+const findDefaultScriptsFolder = () => {
+    const assets = editor.call('assets:list') as Observer[] | null;
+    if (!Array.isArray(assets)) {
+        return null;
+    }
+
+    let chosen: Observer | null = null;
+    let bestDepth = Number.POSITIVE_INFINITY;
+
+    for (const asset of assets) {
+        if (!asset || asset.get('type') !== 'folder') {
+            continue;
+        }
+        const assetId = asset.get('id');
+        if (typeof assetId !== 'number' || Number.isNaN(assetId)) {
+            continue;
+        }
+        if (normalizeFolderName(asset.get('name')) !== DEFAULT_SCRIPT_FOLDER_NAME) {
+            continue;
+        }
+
+        const path = asset.get('path');
+        const depth = Array.isArray(path) ? path.length : 0;
+        if (!chosen || depth < bestDepth) {
+            chosen = asset;
+            bestDepth = depth;
+        }
+    }
+
+    return chosen;
+};
+
 const resolveFolderFromId = (folderId?: number | null) => {
     if (typeof folderId === 'number' && !Number.isNaN(folderId)) {
         const folder = editor.call('assets:get', folderId) as Observer | null;
@@ -101,7 +139,11 @@ const resolveFolderFromId = (folderId?: number | null) => {
         }
         return folder;
     }
-    return editor.call('assets:selected:folder') as Observer | null;
+    const selected = editor.call('assets:selected:folder') as Observer | null;
+    if (selected) {
+        return selected;
+    }
+    return findDefaultScriptsFolder();
 };
 
 const updateScriptAsset = async (asset: Observer, contents: string, overrideFilename?: string | null) => {
