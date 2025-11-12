@@ -17,7 +17,7 @@ type MessageOptions = {
     insertBefore?: HTMLElement | null;
 };
 
-const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Provide concise, actionable answers grounded in the current project context. Keep going until the task is complete. Try your hardest!';
+const DEFAULT_ASSISTANT_INSTRUCTIONS = 'You are the PlayCanvas Editor assistant. Your job is to answer questions and complete game dev tasks for the user. Do your best with the given tools and try your hardest. Do the simplest thing that works.';
 const MAX_INPUT_HEIGHT = 160;
 const TOOL_MESSAGE_LABEL = 'Assistant Tool';
 const TOOL_RUNNING_CLASS = 'assistant-panel__message--tool-running';
