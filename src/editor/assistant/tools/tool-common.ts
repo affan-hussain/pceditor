@@ -25,6 +25,7 @@ export const MAX_SCRIPT_ATTRIBUTE_UPDATES = 40;
 export const MAX_COMPONENT_PROPERTY_UPDATES = 60;
 export const MAX_MATERIAL_UPDATES = 80;
 export const MAX_DATA_REMOVALS = 40;
+export const MAX_REPARENT_OPERATIONS = 10;
 
 export type AssetsUsedIndexEntry = {
     count: number;

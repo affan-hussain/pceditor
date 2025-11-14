@@ -90,6 +90,251 @@ const scriptMimeFromFilename = (filename: string) => {
     return 'text/plain';
 };
 
+const SCRIPT_FILE_READY_TIMEOUT_MS = 10_000;
+const SCRIPT_PARSE_TIMEOUT_MS = 15_000;
+
+type ScriptParseStatus = 'ok' | 'invalid' | 'timeout' | 'error' | 'skipped';
+type ScriptParseSummary = {
+    status: ScriptParseStatus;
+    errors?: string[];
+    warnings?: string[];
+};
+
+type ScriptParsePayload = {
+    scriptsInvalid?: unknown[];
+    scripts?: Record<string, { attributesInvalid?: unknown[] }>;
+};
+
+const isScriptParsingEnabled = () => {
+    try {
+        const settings = editor.call('settings:project') as { get?: (key: string) => unknown } | null;
+        if (settings && typeof settings.get === 'function') {
+            return !settings.get('useLegacyScripts');
+        }
+    } catch (error) {
+        console.warn('[Assistant] Failed to inspect project settings for script parsing', error);
+    }
+    return true;
+};
+
+const waitForAssetFileReady = (asset: Observer, timeoutMs = SCRIPT_FILE_READY_TIMEOUT_MS) => {
+    const file = asset.get('file');
+    if (file?.url) {
+        return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let timerId: number | undefined;
+        const handleComplete = (callback: () => void) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (timerId !== undefined) {
+                window.clearTimeout(timerId);
+            }
+            asset.off('file.url:set', onFileUrlSet);
+            callback();
+        };
+
+        const onFileUrlSet = () => {
+            handleComplete(() => resolve());
+        };
+
+        timerId = window.setTimeout(() => {
+            handleComplete(() => {
+                reject(new Error('Timed out while waiting for the script file to become available.'));
+            });
+        }, timeoutMs);
+
+        asset.on('file.url:set', onFileUrlSet);
+    });
+};
+
+const describeScriptInvalidEntry = (entry: unknown, fallbackFile: string) => {
+    if (!entry) {
+        return 'Unknown script parsing error.';
+    }
+    if (typeof entry === 'string') {
+        return entry;
+    }
+    if (typeof entry === 'object') {
+        const details = entry as { message?: unknown; file?: unknown; line?: unknown; column?: unknown };
+        const file = typeof details.file === 'string' && details.file.trim().length ? details.file.trim() : fallbackFile;
+        const line = typeof details.line === 'number' ? details.line : null;
+        const column = typeof details.column === 'number' ? details.column : null;
+        const locationParts: string[] = [];
+        if (file) {
+            locationParts.push(file);
+        }
+        if (line !== null) {
+            locationParts.push(String(line));
+        }
+        if (column !== null) {
+            locationParts.push(String(column));
+        }
+        const location = locationParts.join(':');
+        const message = typeof details.message === 'string' && details.message.trim().length
+            ? details.message.trim()
+            : 'Script parsing error.';
+        return location ? `${location} - ${message}` : message;
+    }
+    return String(entry);
+};
+
+const describeAttributeIssue = (scriptName: string, issue: unknown) => {
+    if (!issue) {
+        return null;
+    }
+    if (typeof issue === 'string') {
+        return {
+            message: `${scriptName}: ${issue}`,
+            severity: null as number | null
+        };
+    }
+    if (typeof issue !== 'object') {
+        return {
+            message: `${scriptName}: ${String(issue)}`,
+            severity: null as number | null
+        };
+    }
+
+    const details = issue as {
+        severity?: unknown;
+        message?: unknown;
+        fileName?: unknown;
+        startLineNumber?: unknown;
+        startColumn?: unknown;
+        name?: unknown;
+    };
+
+    const locationParts: string[] = [];
+    if (typeof details.fileName === 'string' && details.fileName.trim().length) {
+        locationParts.push(details.fileName.trim());
+    }
+    if (typeof details.startLineNumber === 'number') {
+        let lineSegment = String(details.startLineNumber);
+        if (typeof details.startColumn === 'number') {
+            lineSegment += `:${details.startColumn}`;
+        }
+        locationParts.push(lineSegment);
+    }
+    const location = locationParts.join(':') || scriptName;
+    const name = typeof details.name === 'string' && details.name.trim().length ? ` (${details.name.trim()})` : '';
+    const message = typeof details.message === 'string' && details.message.trim().length
+        ? details.message.trim()
+        : 'Attribute validation issue.';
+
+    return {
+        message: `${location}${name} - ${message}`,
+        severity: typeof details.severity === 'number' ? details.severity : null
+    };
+};
+
+const summarizeScriptParseResult = (result: ScriptParsePayload | undefined, fallbackFile: string) => {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (Array.isArray(result?.scriptsInvalid)) {
+        for (const entry of result.scriptsInvalid) {
+            errors.push(describeScriptInvalidEntry(entry, fallbackFile));
+        }
+    }
+
+    if (result?.scripts && typeof result.scripts === 'object') {
+        for (const [scriptName, scriptDetails] of Object.entries(result.scripts)) {
+            const invalidAttributes = Array.isArray(scriptDetails?.attributesInvalid) ? scriptDetails.attributesInvalid : [];
+            for (const issue of invalidAttributes) {
+                const described = describeAttributeIssue(scriptName, issue);
+                if (!described) {
+                    continue;
+                }
+                if (described.severity === 4) {
+                    warnings.push(described.message);
+                } else {
+                    errors.push(described.message);
+                }
+            }
+        }
+    }
+
+    return { errors, warnings };
+};
+
+const runScriptParseCheck = async (asset: Observer): Promise<ScriptParseSummary | null> => {
+    if (!isScriptParsingEnabled()) {
+        return { status: 'skipped' };
+    }
+
+    try {
+        await waitForAssetFileReady(asset);
+    } catch (error) {
+        return {
+            status: 'error',
+            errors: [`Unable to read script file: ${formatError(error)}`]
+        };
+    }
+
+    return new Promise<ScriptParseSummary>((resolve) => {
+        let settled = false;
+        let timerId: number | undefined;
+        const finish = (summary: ScriptParseSummary) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (timerId !== undefined) {
+                window.clearTimeout(timerId);
+            }
+            resolve(summary);
+        };
+
+        timerId = window.setTimeout(() => {
+            finish({
+                status: 'timeout',
+                errors: ['Script parsing timed out. This usually indicates malformed code.']
+            });
+        }, SCRIPT_PARSE_TIMEOUT_MS);
+
+        try {
+            editor.call('scripts:parse', asset, (error: unknown, result?: ScriptParsePayload) => {
+                if (error) {
+                    finish({
+                        status: 'error',
+                        errors: [`Script parsing failed: ${formatError(error)}`]
+                    });
+                    return;
+                }
+                const assetName = asset.get('name') || asset.get('file')?.filename || 'script';
+                const summary = summarizeScriptParseResult(result, assetName);
+                if (summary.errors.length) {
+                    finish({
+                        status: 'invalid',
+                        errors: summary.errors,
+                        warnings: summary.warnings.length ? summary.warnings : undefined
+                    });
+                    return;
+                }
+                finish({
+                    status: 'ok',
+                    warnings: summary.warnings.length ? summary.warnings : undefined
+                });
+            });
+        } catch (error) {
+            const message = formatError(error);
+            if (message.includes('scripts:parse')) {
+                finish({ status: 'skipped' });
+                return;
+            }
+            finish({
+                status: 'error',
+                errors: [`Script parsing call failed: ${message}`]
+            });
+        }
+    });
+};
+
 const DEFAULT_SCRIPT_FOLDER_NAME = 'scripts';
 
 const normalizeFolderName = (value: unknown) => {
@@ -162,13 +407,26 @@ const updateScriptAsset = async (asset: Observer, contents: string, overrideFile
 };
 
 const createScriptAsset = async (filename: string, contents: string, folder: Observer | null) => {
-    const result = await editor.api.globals.assets.createScript({
-        filename,
-        folder,
-        text: contents
-    });
+    const sanitizedFilename = filename.trim();
+    const payload: Record<string, unknown> = {
+        name: sanitizedFilename,
+        type: 'script',
+        filename: sanitizedFilename,
+        preload: true,
+        file: new Blob([contents], { type: scriptMimeFromFilename(sanitizedFilename) }),
+        data: {
+            scripts: {},
+            loading: false,
+            loadingType: 0
+        }
+    };
 
-    return (result as { observer?: Observer } | null)?.observer || null;
+    if (folder) {
+        (payload as { folder: Observer }).folder = folder;
+    }
+
+    const asset = await editor.api.globals.assets.upload(payload);
+    return asset as Observer | null;
 };
 
 const adjustScriptOrder = (entity: Observer, scriptName: string, rawIndex?: number | null) => {
@@ -457,6 +715,48 @@ const readScriptTool: AssistantToolDefinition<ScriptReadArgs> = {
     }
 };
 
+const buildScriptWriteResponse = (
+    action: 'created' | 'updated',
+    asset: Observer,
+    characters: number,
+    description: string | null,
+    parseSummary?: ScriptParseSummary | null
+) => {
+    const response: Record<string, unknown> = {
+        action,
+        asset: buildAssetSummary(asset),
+        characters,
+        note: description,
+        parseStatus: parseSummary?.status ?? 'ok'
+    };
+
+    if (!parseSummary || parseSummary.status === 'skipped' || parseSummary.status === 'ok') {
+        if (parseSummary?.warnings?.length) {
+            response.parseWarnings = parseSummary.warnings;
+        }
+        return response;
+    }
+
+    if (parseSummary.errors?.length) {
+        response.parseErrors = parseSummary.errors;
+    }
+    if (parseSummary.warnings?.length) {
+        response.parseWarnings = parseSummary.warnings;
+    }
+
+    let errorMessage = 'Script parsing failed. Review parseErrors for details.';
+    if (parseSummary.status === 'timeout') {
+        errorMessage = 'Script parsing timed out. The script likely contains syntax errors.';
+    } else if (parseSummary.status === 'invalid') {
+        errorMessage = 'Script parsing reported errors. Fix the code and try again.';
+    } else if (parseSummary.status === 'error') {
+        errorMessage = parseSummary.errors?.[0] || errorMessage;
+    }
+
+    response.error = errorMessage;
+    return response;
+};
+
 const writeScriptTool: AssistantToolDefinition<ScriptWriteArgs> = {
     name: 'write_script_asset',
     description: 'Creates a new script asset or overwrites an existing one with the provided contents. All scripts must be authored as PlayCanvas ESM modules: use the `.mjs` extension, import { Script } from \'playcanvas\', export one or more classes that extend Script, and set static scriptName on every exported class. Avoid legacy pc.createScript patterns—always rely on ES module syntax (imports/exports) so multiple classes can be exported from a single file when needed.',
@@ -504,17 +804,14 @@ const writeScriptTool: AssistantToolDefinition<ScriptWriteArgs> = {
         const normalizedContents = rawArgs.contents.replace(/\r\n?/g, '\n');
         const filename = typeof rawArgs.filename === 'string' && rawArgs.filename.trim().length ? rawArgs.filename.trim() : null;
         const assetId = typeof rawArgs.assetId === 'number' ? rawArgs.assetId : null;
+        const description = typeof rawArgs.description === 'string' && rawArgs.description.trim().length ? rawArgs.description.trim() : null;
 
         try {
             if (assetId !== null) {
                 const asset = getScriptAsset(assetId);
                 const updatedAsset = await updateScriptAsset(asset, normalizedContents, filename);
-                return {
-                    action: 'updated',
-                    asset: buildAssetSummary(updatedAsset),
-                    characters: normalizedContents.length,
-                    note: rawArgs.description || null
-                };
+                const parseSummary = await runScriptParseCheck(updatedAsset);
+                return buildScriptWriteResponse('updated', updatedAsset, normalizedContents.length, description, parseSummary);
             }
 
             if (!filename) {
@@ -529,12 +826,8 @@ const writeScriptTool: AssistantToolDefinition<ScriptWriteArgs> = {
                 throw new Error('The new script asset could not be resolved after creation.');
             }
 
-            return {
-                action: 'created',
-                asset: buildAssetSummary(newAsset),
-                characters: normalizedContents.length,
-                note: rawArgs.description || null
-            };
+            const parseSummary = await runScriptParseCheck(newAsset);
+            return buildScriptWriteResponse('created', newAsset, normalizedContents.length, description, parseSummary);
         } catch (error) {
             return {
                 error: formatError(error)
